@@ -1,0 +1,6 @@
+{
+  "name": "Learning OS",
+  "description": "Модульная операционная веб-среда обучения с динамическим DAG-графом курсов на базе LLM, macOS glassmorphism интерфейсом, P2P коллаборацией, ролевыми проектами и анти-инфоцыганским модерационным контуром.",
+  "requestFramePermissions": ["camera", "microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,133 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    font-family: 'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+    user-select: none;
+    overflow: hidden;
+    background-color: #F8F9FA;
+    color: #202124;
+  }
+
+  code, pre, kbd {
+    font-family: 'JetBrains Mono', 'Roboto Mono', monospace;
+  }
+}
+
+/* Google-style clean minimalist scrollbars */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #DADCE0;
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #BDC1C6;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+/* Google Material 3 Adaptive Grid */
+.pc-adaptive-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 1rem;
+  align-items: start;
+}
+
+@media (min-width: 1920px) {
+  .pc-adaptive-grid {
+    grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
+    gap: 1.25rem;
+  }
+}
+
+/* Google Workspace Clean Panels and Surfaces */
+.google-surface {
+  background-color: #FFFFFF;
+  border: 1px solid #DADCE0;
+  box-shadow: 0 1px 2px 0 rgba(60, 64, 67, 0.3), 0 1px 3px 1px rgba(60, 64, 67, 0.15);
+}
+
+.google-card {
+  background-color: #FFFFFF;
+  border: 1px solid #DADCE0;
+  border-radius: 16px;
+  box-shadow: 0 1px 2px 0 rgba(60, 64, 67, 0.1);
+  transition: box-shadow 0.15s ease, border-color 0.15s ease;
+}
+
+.google-card:hover {
+  box-shadow: 0 1px 3px 0 rgba(60, 64, 67, 0.2), 0 4px 8px 3px rgba(60, 64, 67, 0.1);
+}
+
+/* Google Chip / Pill */
+.google-chip {
+  background-color: #F1F3F4;
+  color: #3C4043;
+  border-radius: 8px;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.google-chip:hover {
+  background-color: #E8EAED;
+  color: #202124;
+}
+
+.google-chip-active {
+  background-color: #E8F0FE;
+  color: #1A73E8;
+  border: 1px solid #D2E3FC;
+}
+
+/* Subtle architectural grid for DAG and Canvas */
+.dag-grid-bg {
+  background-color: #FFFFFF;
+  background-image: radial-gradient(#DADCE0 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+
+/* Clean Google Desktop Theme */
+.studio-slate-bg {
+  background-color: #F8F9FA;
+  background-image: radial-gradient(#E8EAED 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+.studio-light-bg {
+  background-color: #FFFFFF;
+  background-image: radial-gradient(#E8EAED 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+.bitrix-floral-bg {
+  background-color: #F8F9FA;
+  background-image: radial-gradient(#E8EAED 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+/* Google-style fade in */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.15s cubic-bezier(0.2, 0, 0, 1) forwards;
+}
+
+/* Ultra-clean typography and contrast */
+.text-balance {
+  text-wrap: balance;
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}

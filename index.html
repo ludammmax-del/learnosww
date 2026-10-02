@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Learning OS</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="description" content="Модульная операционная веб-среда обучения с динамическим DAG-графом курсов на базе LLM, macOS glassmorphism интерфейсом, P2P коллаборацией, ролевыми проектами и анти-инфоцыганским модерационным контуром." />
+    <meta property="og:title" content="Learning OS" />
+    <meta property="og:description" content="Модульная операционная веб-среда обучения с динамическим DAG-графом курсов на базе LLM, macOS glassmorphism интерфейсом, P2P коллаборацией, ролевыми проектами и анти-инфоцыганским модерационным контуром." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Roboto:wght@300;400;500;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <script>
+      // Suppress transient dev WebSocket / HMR disconnect noise in iframe preview
+      (function() {
+        window.addEventListener('unhandledrejection', function(event) {
+          var reason = event && event.reason;
+          var msg = (reason && (reason.message || (typeof reason === 'string' ? reason : ''))) || '';
+          if (/websocket|failed to connect/i.test(msg)) {
+            event.preventDefault();
+            event.stopImmediatePropagation && event.stopImmediatePropagation();
+          }
+        });
+        window.addEventListener('error', function(event) {
+          var msg = (event && (event.message || '')) || '';
+          if (/websocket|failed to connect/i.test(msg)) {
+            event.preventDefault();
+            event.stopImmediatePropagation && event.stopImmediatePropagation();
+          }
+        });
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+

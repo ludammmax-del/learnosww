@@ -1,0 +1,230 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function ownsCommunityRoom(roomId) {
+      return isAuthenticated() &&
+        get(/databases/$(database)/documents/community_rooms/$(roomId)).data.creatorId == request.auth.uid;
+    }
+
+    function canAccessCommunityRoom(roomId) {
+      return isAuthenticated() && (ownsCommunityRoom(roomId) ||
+        (exists(/databases/$(database)/documents/community_rooms/$(roomId)/members/$(request.auth.uid)) &&
+         !exists(/databases/$(database)/documents/community_rooms/$(roomId)/banned_members/$(request.auth.uid))));
+    }
+
+    function canReadCommunityRoom(roomId) {
+      return resource.data.get('isPrivate', false) == false || canAccessCommunityRoom(roomId);
+    }
+
+    function canJoinCommunityRoom(roomId) {
+      let existingMembers = resource.data.get('members', []);
+      let requestedMembers = request.resource.data.get('members', []);
+      return isAuthenticated() &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['members', 'memberCount', 'updatedAt']) &&
+        requestedMembers.size() == existingMembers.size() + 1 &&
+        requestedMembers.hasAll(existingMembers) &&
+        requestedMembers[requestedMembers.size() - 1].userId == request.auth.uid &&
+        requestedMembers[requestedMembers.size() - 1].role == 'member' &&
+        request.resource.data.memberCount == requestedMembers.size() &&
+        request.resource.data.memberCount <= request.resource.data.maxMembers &&
+        !exists(/databases/$(database)/documents/community_rooms/$(roomId)/banned_members/$(request.auth.uid));
+    }
+
+    function isPeerSessionMember() {
+      let sessionData = resource.data;
+      let userA = sessionData.get('userA', {});
+      let userB = sessionData.get('userB', null);
+      return isAuthenticated() && (userA.get('id', '') == request.auth.uid ||
+        (userB != null && userB.get('id', '') == request.auth.uid));
+    }
+
+    function canJoinPeerSession() {
+      return isAuthenticated() && resource.data.get('isOpenToLobby', false) == true &&
+        resource.data.get('userB', null) == null &&
+        request.resource.data.get('userA', {}).get('id', '') == resource.data.get('userA', {}).get('id', '') &&
+        request.resource.data.get('userB', {}).get('id', '') == request.auth.uid &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['userB', 'isOpenToLobby', 'messages', 'updatedAt']);
+    }
+
+    function canUpdatePeerSession() {
+      let oldA = resource.data.get('userA', {}).get('id', '');
+      let oldBData = resource.data.get('userB', null);
+      let oldB = oldBData == null ? '' : oldBData.get('id', '');
+      let newA = request.resource.data.get('userA', {}).get('id', '');
+      let newBData = request.resource.data.get('userB', null);
+      let newB = newBData == null ? '' : newBData.get('id', '');
+      let stays = newA == oldA && newB == oldB;
+      let leavesAsB = oldB == request.auth.uid && newA == oldA && newB == '';
+      let leavesAsA = oldA == request.auth.uid && oldB != '' && newA == oldB && newB == '';
+      return isPeerSessionMember() && (stays || leavesAsB || leavesAsA) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'userA', 'userB', 'activeUnitId', 'dailyRoomUrl', 'sharedCode', 'lastCodeEditorId',
+          'whiteboardStrokes', 'messages', 'consensusTestOption', 'userAReady', 'userBReady',
+          'isOpenToLobby', 'updatedAt'
+        ]);
+    }
+
+    function isCommunityPeerEvent(roomId) {
+      return canAccessCommunityRoom(roomId) && request.resource.data.senderId == request.auth.uid &&
+        request.resource.data.keys().hasAll(['lastEvent', 'updatedAt', 'senderId']) &&
+        request.resource.data.keys().hasOnly(['lastEvent', 'updatedAt', 'senderId']);
+    }
+
+    match /learning_units/{unitId} {
+      allow read, write: if false;
+    }
+
+    match /user_learning_units/{userId}/units/{unitId} {
+      allow read, write: if isAuthenticated() && request.auth.uid == userId;
+    }
+
+    match /user_learning_paths/{pathId} {
+      allow read, write: if isAuthenticated() && request.auth.uid == pathId;
+    }
+
+    match /peer_sessions/{sessionId} {
+      allow read: if canAccessCommunityRoom(sessionId) ||
+        (resource != null && (isPeerSessionMember() || resource.data.get('isOpenToLobby', false) == true));
+      allow create: if isAuthenticated() &&
+        request.resource.data.get('userA', {}).get('id', '') == request.auth.uid &&
+        request.resource.data.get('userB', null) == null || isCommunityPeerEvent(sessionId);
+      allow update: if canUpdatePeerSession() || canJoinPeerSession() ||
+        (canAccessCommunityRoom(sessionId) && request.resource.data.senderId == request.auth.uid &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastEvent', 'updatedAt', 'senderId']));
+      allow delete: if isPeerSessionMember() &&
+        resource.data.get('userA', {}).get('id', '') == request.auth.uid &&
+        resource.data.get('userB', null) == null;
+    }
+
+    match /matchmaking_queue/{userId} {
+      allow read, write: if false;
+    }
+
+    match /user_artifacts/{artifactId} {
+      allow read, delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      allow update: if isAuthenticated() && resource.data.userId == request.auth.uid &&
+        request.resource.data.userId == request.auth.uid;
+    }
+
+    match /user_profiles/{userId} {
+      allow read, delete: if isAuthenticated() && request.auth.uid == userId;
+      allow create, update: if isAuthenticated() && request.auth.uid == userId &&
+        request.resource.data.userId == request.auth.uid;
+    }
+
+    match /public_user_profiles/{userId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated() && request.auth.uid == userId &&
+        request.resource.data.uid == request.auth.uid;
+      allow delete: if isAuthenticated() && request.auth.uid == userId;
+    }
+
+    match /public_portfolios/{userId} {
+      allow read: if resource.data.get('isPublic', false) == true ||
+        (isAuthenticated() && request.auth.uid == userId);
+      allow create, update: if isAuthenticated() && request.auth.uid == userId &&
+        request.resource.data.uid == request.auth.uid &&
+        request.resource.data.isPublic == true &&
+        request.resource.data.keys().hasOnly(['uid', 'displayName', 'avatar', 'isPublic', 'artifacts', 'publishedAt', 'updatedAt']) &&
+        request.resource.data.displayName is string &&
+        request.resource.data.artifacts is list &&
+        request.resource.data.artifacts.size() <= 20;
+      allow delete: if isAuthenticated() && request.auth.uid == userId;
+    }
+
+    match /partner_requests/{requestId} {
+      allow read: if isAuthenticated() &&
+        (resource.data.fromUserId == request.auth.uid || resource.data.toUserId == request.auth.uid);
+      allow create: if isAuthenticated() &&
+        request.resource.data.fromUserId == request.auth.uid &&
+        request.resource.data.toUserId is string &&
+        request.resource.data.toUserId != request.auth.uid &&
+        request.resource.data.status == 'pending' &&
+        request.resource.data.keys().hasAll(['fromUserId', 'toUserId', 'status', 'pairTask', 'createdAt']);
+      allow update: if isAuthenticated() &&
+        resource.data.toUserId == request.auth.uid &&
+        resource.data.status == 'pending' &&
+        request.resource.data.status in ['accepted', 'rejected'] &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt']);
+      allow delete: if isAuthenticated() && resource.data.fromUserId == request.auth.uid &&
+        resource.data.status == 'pending';
+    }
+
+    match /profile_wall_posts/{postId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() &&
+        request.resource.data.authorId == request.auth.uid &&
+        request.resource.data.ownerUid is string &&
+        request.resource.data.kind in ['debug', 'optimization', 'fieldnote'] &&
+        request.resource.data.text is string &&
+        request.resource.data.text.size() <= 10000 &&
+        (request.resource.data.nodeId is string || request.resource.data.taskId is string);
+      allow update, delete: if isAuthenticated() && resource.data.authorId == request.auth.uid;
+    }
+
+    match /community_rooms/{roomId} {
+      allow read: if !resource.data.get('isPrivate', false) || canAccessCommunityRoom(roomId);
+      allow create: if isAuthenticated() && request.resource.data.creatorId == request.auth.uid;
+      allow update: if ownsCommunityRoom(roomId) || canJoinCommunityRoom(roomId) ||
+        (canAccessCommunityRoom(roomId) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['feedPosts', 'updatedAt']));
+      allow delete: if ownsCommunityRoom(roomId);
+
+      match /members/{userId} {
+        allow read: if ownsCommunityRoom(roomId) || (isAuthenticated() && request.auth.uid == userId);
+        allow create: if ownsCommunityRoom(roomId) && request.resource.data.userId == userId ||
+          (isAuthenticated() && request.auth.uid == userId && request.resource.data.userId == userId &&
+           request.resource.data.role in ['member', 'architect', 'auditor'] &&
+           get(/databases/$(database)/documents/community_rooms/$(roomId)).data.memberCount <
+             get(/databases/$(database)/documents/community_rooms/$(roomId)).data.maxMembers &&
+           !exists(/databases/$(database)/documents/community_rooms/$(roomId)/banned_members/$(userId)));
+        allow update: if ownsCommunityRoom(roomId) ||
+          (isAuthenticated() && request.auth.uid == userId &&
+           request.resource.data.userId == userId && request.resource.data.role == resource.data.role &&
+           !exists(/databases/$(database)/documents/community_rooms/$(roomId)/banned_members/$(userId)));
+        allow delete: if ownsCommunityRoom(roomId) || (isAuthenticated() && request.auth.uid == userId);
+      }
+
+      match /banned_members/{userId} {
+        allow read: if ownsCommunityRoom(roomId) || (isAuthenticated() && request.auth.uid == userId);
+        allow create: if ownsCommunityRoom(roomId) && request.resource.data.userId == userId;
+        allow update, delete: if false;
+      }
+    }
+
+    match /community_whiteboards/{roomId} {
+      allow read, write: if exists(/databases/$(database)/documents/community_rooms/$(roomId)) && canAccessCommunityRoom(roomId);
+    }
+
+    match /community_chat/{roomId} {
+      allow read, write: if exists(/databases/$(database)/documents/community_rooms/$(roomId)) && canAccessCommunityRoom(roomId);
+
+      match /messages/{messageId} {
+        allow read, write: if exists(/databases/$(database)/documents/community_rooms/$(roomId)) && canAccessCommunityRoom(roomId);
+      }
+    }
+
+    match /admin_materials/{materialId} {
+      allow read: if isAuthenticated();
+      allow write: if false;
+    }
+
+    match /grounded_knowledge_cache/{cacheKey} {
+      allow read, write: if false;
+    }
+
+    match /document_essence_cache/{docKey} {
+      allow read, write: if false;
+    }
+
+    match /test/{docId} {
+      allow read: if isAuthenticated();
+      allow write: if false;
+    }
+  }
+}
