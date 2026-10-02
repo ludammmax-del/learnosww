@@ -102,6 +102,7 @@ import { CalendarWindow } from '../windows/CalendarWindow.tsx';
 import { WidgetsWindow } from '../windows/WidgetsWindow.tsx';
 import { KeyboardShortcutsWindow } from '../windows/KeyboardShortcutsWindow.tsx';
 import { TextbookLibraryWindow } from '../windows/TextbookLibraryWindow.tsx';
+import { DiagnosticSurveyWindow } from '../windows/DiagnosticSurveyWindow.tsx';
 
 export type DesktopWallpaper = 'sequoia' | 'aurora' | 'studio_slate' | 'cyber_dark' | 'bitrix_flora';
 
@@ -165,6 +166,7 @@ interface DesktopWorkspaceProps {
   onLessonCompleted?: (unitId: string) => void;
   onSaveArtifact?: (artifact: UserArtifact) => void;
   onUpdateUnit?: (unit: LearningUnit) => void;
+  onApplyGeneratedPath?: (nodes: any[], edges: any[], summary: any, generatedUnits?: Record<string, LearningUnit>) => void;
 }
 
 const DEFAULT_WIDGETS: DesktopWidgetInstance[] = [
@@ -233,6 +235,7 @@ export const DesktopWorkspace: React.FC<DesktopWorkspaceProps> = ({
   onLessonCompleted,
   onSaveArtifact,
   onUpdateUnit,
+  onApplyGeneratedPath,
 }) => {
   // 1. Wallpaper State (Unified with Global Wallpaper)
   const effectiveConfig = wallpaperConfig || DEFAULT_WALLPAPER_CONFIG;
@@ -624,8 +627,9 @@ export const DesktopWorkspace: React.FC<DesktopWorkspaceProps> = ({
     admin: { id: 'admin', title: 'Контроль качества & Модерация', isOpen: false, isMinimized: false, isMaximized: false, zIndex: 17, position: { x: 110, y: 65 }, size: { width: 960, height: 620 } },
     partner_search: { id: 'partner_search', title: 'Поиск напарника (P2P Matchmaking)', isOpen: false, isMinimized: false, isMaximized: false, zIndex: 18, position: { x: 130, y: 70 }, size: { width: 860, height: 600 } },
     textbook_library: { id: 'textbook_library', title: 'Библиотека учебника', isOpen: false, isMinimized: false, isMaximized: false, zIndex: 19, position: { x: 110, y: 60 }, size: { width: 1100, height: 720 } },
-    notes: { id: 'notes', title: 'Заметки', isOpen: false, isMinimized: false, isMaximized: false, zIndex: 20, position: { x: 100, y: 60 }, size: { width: 800, height: 500 } },
-    settings: { id: 'settings', title: 'Настройки', isOpen: false, isMinimized: false, isMaximized: false, zIndex: 21, position: { x: 100, y: 60 }, size: { width: 800, height: 500 } },
+    survey: { id: 'survey', title: 'Входная диагностика & Адаптивный план', isOpen: false, isMinimized: false, isMaximized: false, zIndex: 20, position: { x: 90, y: 50 }, size: { width: 1040, height: 680 } },
+    notes: { id: 'notes', title: 'Заметки', isOpen: false, isMinimized: false, isMaximized: false, zIndex: 21, position: { x: 100, y: 60 }, size: { width: 800, height: 500 } },
+    settings: { id: 'settings', title: 'Настройки', isOpen: false, isMinimized: false, isMaximized: false, zIndex: 22, position: { x: 100, y: 60 }, size: { width: 800, height: 500 } },
   });
 
   const [activeWindowId, setActiveWindowId] = useState<string | null>(null);
@@ -2303,6 +2307,36 @@ export const DesktopWorkspace: React.FC<DesktopWorkspaceProps> = ({
               )}
 
               {win.id === 'settings' && <KeyboardShortcutsWindow />}
+
+              {win.id === 'survey' && (
+                <DiagnosticSurveyWindow
+                  onApplyGeneratedPath={(newNodes, newEdges, summary, genUnits) => {
+                    if (onApplyGeneratedPath) {
+                      onApplyGeneratedPath(newNodes, newEdges, summary, genUnits);
+                    }
+                    handleCloseWindow('survey');
+                  }}
+                  onClose={() => handleCloseWindow('survey')}
+                  onLaunchUnit={handleLaunchModuleWindow}
+                  onNavigateToDag={() => {
+                    handleCloseWindow('survey');
+                    handleOpenFloatingWindow('dag');
+                  }}
+                  adminUnits={adminUnits}
+                  matchedPartner={partner}
+                  onPartnerMatched={onPartnerMatched}
+                  onOpenPeerWindow={() => {
+                    handleCloseWindow('survey');
+                    handleOpenFloatingWindow('peer');
+                  }}
+                  onStartCallWithPartner={onStartCallWithPartner}
+                  currentUser={currentUser}
+                  existingNodes={nodes}
+                  existingEdges={edges}
+                  existingUnits={units}
+                  onLessonCompleted={onLessonCompleted}
+                />
+              )}
 
               {win.id === 'admin' && (
                 <AdminConsoleWindow

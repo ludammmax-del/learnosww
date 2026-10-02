@@ -14,12 +14,13 @@ import {
   generateProceduralTaxonomy,
   getDomainOrProceduralTaxonomy,
 } from './domainTaxonomies.ts';
-import { CurriculumModule, CurriculumSprint, detectDomainCategory } from './curriculumGenerator.ts';
+import type { CurriculumModule, CurriculumSprint } from './curriculumGenerator.ts';
+import { detectDomainCategory } from './curriculumGenerator.ts';
 import {
   retrieveMultiSourceGrounding,
   formatSourcesForPrompt,
-  GroundingSourceItem,
 } from './textbookKnowledgeService.ts';
+import type { GroundingSourceItem } from './textbookKnowledgeService.ts';
 
 dotenv.config();
 

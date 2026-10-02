@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Search, Monitor, Network, Atom, Tv, Bot, Users, LayoutGrid, ShieldCheck, FileText, ArrowRight, X, PenTool, Calendar as CalendarIcon } from 'lucide-react';
+import { Search, Monitor, Network, Atom, Tv, Bot, Users, LayoutGrid, ShieldCheck, FileText, ArrowRight, X, PenTool, Calendar as CalendarIcon, GraduationCap, BookOpen, GitBranch, Award } from 'lucide-react';
 import { WindowId, LearningUnit, NoteItem } from '../../types.ts';
 
 interface SpotlightModalProps {
@@ -47,6 +47,10 @@ export const SpotlightModal: React.FC<SpotlightModalProps> = ({
     { title: 'Рабочий стол с виджетами Web OS', icon: <Monitor className="w-4 h-4 text-sky-500" />, action: () => onOpenWindow('desktop') },
     { title: 'Сфера знаний 3D (Holographic Knowledge Sphere)', icon: <Atom className="w-4 h-4 text-sky-400 animate-spin-slow" />, action: () => onOpenWindow('knowledge_sphere') },
     { title: 'Открыть план обучения (DAG граф)', icon: <Network className="w-4 h-4 text-slate-500" />, action: () => onOpenWindow('dag') },
+    { title: 'Входная диагностика & Адаптивный план (200 блоков)', icon: <GraduationCap className="w-4 h-4 text-indigo-500" />, action: () => onOpenWindow('survey') },
+    { title: 'Библиотека академических учебников & Квантов', icon: <BookOpen className="w-4 h-4 text-emerald-500" />, action: () => onOpenWindow('textbook_library') },
+    { title: 'Git-Репозиторий Знаний & Инварианты', icon: <GitBranch className="w-4 h-4 text-purple-500" />, action: () => onOpenWindow('knowledge_git') },
+    { title: 'Портфолио проверенных решений & Сданные артефакты', icon: <Award className="w-4 h-4 text-amber-500" />, action: () => onOpenWindow('portfolio') },
     { title: 'Календарь & Расписание уроков (на основе ресурса времени)', icon: <CalendarIcon className="w-4 h-4 text-sky-500" />, action: () => onOpenWindow('calendar') },
     { title: 'Перейти в Фокус-студию (Плеер 20/10/70)', icon: <Tv className="w-4 h-4 text-slate-500" />, action: () => onOpenWindow('focus') },
     { title: 'Запустить ИИ-Оператора системы', icon: <Bot className="w-4 h-4 text-slate-500" />, action: () => onOpenWindow('chat') },

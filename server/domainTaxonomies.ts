@@ -1,4 +1,4 @@
-import { CurriculumModule } from './curriculumGenerator.ts';
+import type { CurriculumModule } from './curriculumGenerator.ts';
 
 // 1. FOREIGN LANGUAGES & CONVERSATIONAL FLUENCY (200 Concrete Blocks)
 export const LANGUAGES_TAXONOMY: CurriculumModule[] = [

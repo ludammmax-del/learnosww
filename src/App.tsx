@@ -22,6 +22,7 @@ import { WhiteScreenWindow } from './components/windows/WhiteScreenWindow.tsx';
 import { CalendarWindow } from './components/windows/CalendarWindow.tsx';
 import { KnowledgeGitWindow } from './components/windows/KnowledgeGitWindow.tsx';
 import { TextbookLibraryWindow } from './components/windows/TextbookLibraryWindow.tsx';
+import { DiagnosticSurveyWindow } from './components/windows/DiagnosticSurveyWindow.tsx';
 import { KeyboardShortcutsWindow } from './components/windows/KeyboardShortcutsWindow.tsx';
 import { GoogleAuthModal } from './components/auth/GoogleAuthModal.tsx';
 import { OsSetupAssistant } from './components/auth/OsSetupAssistant.tsx';
@@ -1236,6 +1237,11 @@ function LearningOSApp() {
           }}
           onDeleteNote={(id) => setNotes((prev) => prev.filter((x) => x.id !== id))}
           artifacts={artifacts}
+          onSaveArtifact={handleSaveArtifact}
+          karma={karma}
+          onAddKarma={(amount) => setKarma((prev) => prev + amount)}
+          edges={edges}
+          onMutateGraph={handleMutateGraph}
           pomodoroMinutes={pomodoroMinutes}
           pomodoroSecondsLeft={pomodoroSecondsLeft}
           isPomodoroRunning={isPomodoroRunning}

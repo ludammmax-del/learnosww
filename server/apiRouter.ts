@@ -37,7 +37,7 @@ import {
   negotiatePeerBlockProject,
 } from './geminiApi.ts';
 import { retrieveMultiSourceGrounding } from './textbookKnowledgeService.ts';
-import { EpistemicLedger, CastalianBridge } from './epistemicLedger.ts';
+import { EpistemicLedger, type CastalianBridge } from './epistemicLedger.ts';
 import { FirestoreKnowledgeCache } from './firestoreKnowledgeCache.ts';
 import { TextbookDistiller } from './textbookDistiller.ts';
 import { PdfDistillerService } from './pdfDistillerService.ts';
@@ -226,13 +226,94 @@ except Exception as e:
         try { unlinkSync(scriptPath); } catch {}
         return res.json({
           success: false,
-          logs: [{ type: 'error', text: `Ошибка запуска: ${err.message}`, time: Date.now() }],
+          logs: [{ type: 'error', text: `Ошибка запуска Python: ${err.message}`, time: Date.now() }],
+          durationMs: Date.now() - startTime,
+          runtimeError: err.message,
+        });
+      });
+    } else if (language === 'javascript' || language === 'js' || language === 'typescript' || language === 'ts') {
+      const tmpDir = os.tmpdir();
+      const scriptId = `script_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+      const isTs = language === 'typescript' || language === 'ts';
+      const scriptPath = path.join(tmpDir, `${scriptId}.${isTs ? 'ts' : 'js'}`);
+
+      let fullScript = code;
+      if (Array.isArray(tests) && tests.length > 0) {
+        fullScript += `\n\n// --- AUTOMATED TESTS ---\nconst __test_results__ = [];\n`;
+        tests.forEach((t: any, i: number) => {
+          fullScript += `
+try {
+  ${t.testFnBody || ''}
+  __test_results__.push({ name: ${JSON.stringify(t.name || `Тест ${i + 1}`)}, passed: true });
+} catch (e) {
+  __test_results__.push({ name: ${JSON.stringify(t.name || `Тест ${i + 1}`)}, passed: false, error: String((e && e.message) || e) });
+}
+`;
+        });
+        fullScript += `\nconsole.log("__TEST_OUTPUT_BEGIN__");\nconsole.log(JSON.stringify(__test_results__));\n`;
+      }
+
+      writeFileSync(scriptPath, fullScript, 'utf8');
+
+      const nodeArgs = isTs ? ['--experimental-strip-types', scriptPath] : [scriptPath];
+      const child = spawn(process.execPath, nodeArgs, {
+        timeout: Math.min(10000, timeoutMs),
+      });
+
+      let stdout = '';
+      let stderr = '';
+
+      child.stdout.on('data', (d) => { stdout += d.toString(); });
+      child.stderr.on('data', (d) => { stderr += d.toString(); });
+
+      child.on('close', (exitCode) => {
+        try { unlinkSync(scriptPath); } catch {}
+        const durationMs = Date.now() - startTime;
+
+        let parsedTests: any[] = [];
+        let cleanStdout = stdout;
+        if (stdout.includes('__TEST_OUTPUT_BEGIN__')) {
+          const parts = stdout.split('__TEST_OUTPUT_BEGIN__');
+          cleanStdout = parts[0].trim();
+          try {
+            parsedTests = JSON.parse(parts[1].trim());
+          } catch {}
+        }
+
+        const logs = [];
+        if (cleanStdout) {
+          logs.push({ type: 'log', text: cleanStdout, time: Date.now() });
+        }
+        if (stderr) {
+          logs.push({ type: 'error', text: stderr, time: Date.now() });
+        }
+
+        const testsPassed = parsedTests.filter((t: any) => t.passed).length;
+
+        return res.json({
+          success: exitCode === 0 && (!parsedTests.length || testsPassed === parsedTests.length),
+          logs,
+          stdout: cleanStdout,
+          stderr,
+          testResults: parsedTests,
+          testsPassed,
+          totalTests: parsedTests.length,
+          durationMs,
+          exitCode,
+        });
+      });
+
+      child.on('error', (err) => {
+        try { unlinkSync(scriptPath); } catch {}
+        return res.json({
+          success: false,
+          logs: [{ type: 'error', text: `Ошибка запуска Node.js: ${err.message}`, time: Date.now() }],
           durationMs: Date.now() - startTime,
           runtimeError: err.message,
         });
       });
     } else {
-      return res.status(400).json({ success: false, error: `Language ${language} should run in client worker` });
+      return res.status(400).json({ success: false, error: `Language ${language} not supported for backend execution` });
     }
   } catch (err: any) {
     return res.status(500).json({ success: false, error: err?.message || 'Code execution failed' });
@@ -958,16 +1039,20 @@ apiRouter.post('/peer/matchmaking/disconnect', (req, res) => {
   res.json({ success: true });
 });
 
-// Daily.co Real WebRTC Video Call Room Creation
+// Daily.co Real WebRTC Video Call Room Creation (with Jitsi Meet instant WebRTC fallback)
 apiRouter.post('/daily/create-room', async (req, res) => {
   res.setHeader('Content-Type', 'application/json');
   try {
+    const roomName = `learning-os-${Date.now().toString(36)}`;
     const apiKey = process.env.DAILY_API_KEY;
     if (!apiKey) {
-      return res.status(500).json({ success: false, error: 'DAILY_API_KEY is not configured. Set env var for video-room creation.' });
+      return res.json({
+        success: true,
+        url: `https://meet.jit.si/learning-os-${roomName}#config.prejoinPageEnabled=false`,
+        name: roomName,
+        provider: 'jitsi_webrtc',
+      });
     }
-
-    const roomName = `learning-os-${Date.now().toString(36)}`;
     
     const dailyRes = await fetch('https://api.daily.co/v1/rooms', {
       method: 'POST',
@@ -1120,12 +1205,22 @@ apiRouter.post('/gemini/evaluate-pair-call', async (req, res) => {
 apiRouter.post('/gemini/peer-sparring-turn', async (req, res) => {
   res.setHeader('Content-Type', 'application/json');
   try {
-    const { unitTitle, userRole, userStatement, dialogueHistory, codeOrArtifact, domain } = req.body || {};
+    const {
+      unitTitle,
+      topic,
+      userRole,
+      speakerRole,
+      userStatement,
+      dialogueHistory,
+      history,
+      codeOrArtifact,
+      domain,
+    } = req.body || {};
     const result = await generatePeerSparringTurn({
-      unitTitle: unitTitle || 'Инварианты системы',
-      userRole: userRole || 'Architect',
+      unitTitle: unitTitle || topic || 'Инварианты темы',
+      userRole: (userRole || speakerRole || 'Speaker') as any,
       userStatement: userStatement || '',
-      dialogueHistory: dialogueHistory || [],
+      dialogueHistory: dialogueHistory || history || [],
       codeOrArtifact,
       domain,
     });

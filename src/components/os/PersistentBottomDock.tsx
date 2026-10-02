@@ -12,6 +12,8 @@ import {
   Award, 
   LayoutGrid, 
   ShieldCheck,
+  BookOpen,
+  GraduationCap,
   X
 } from 'lucide-react';
 import { playChime } from '../../utils/audio.ts';
@@ -27,6 +29,8 @@ const DOCK_APPS = [
   { id: 'dag', label: 'DAG-Граф', icon: Network },
   { id: 'knowledge_sphere', label: 'Сфера знаний 3D', icon: Atom },
   { id: 'knowledge_git', label: 'Git Знаний', icon: GitBranch },
+  { id: 'textbook_library', label: 'Учебники & Кванты', icon: BookOpen },
+  { id: 'survey', label: 'Диагностика & План', icon: GraduationCap },
   { id: 'calendar', label: 'Календарь', icon: Calendar },
   { id: 'focus', label: 'Фокус-Студия', icon: Tv },
   { id: 'peer', label: 'P2P Напарник', icon: Users },
