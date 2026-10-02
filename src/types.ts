@@ -788,6 +788,45 @@ export interface CommunityRoomBan {
   bannedAt: string;
 }
 
+export interface AttachedHabitPostItem {
+  id: string;
+  title: string;
+  streak: number;
+  completedToday: boolean;
+  bestStreak?: number;
+  category?: string;
+  targetDaysPerWeek?: number;
+}
+
+export interface AttachedMetricPostItem {
+  type: 'streak' | 'focus_time' | 'exam_score' | 'knowledge_retention';
+  label: string;
+  value: string | number;
+  subtext?: string;
+}
+
+export interface AttachedProjectPostItem {
+  title: string;
+  filename?: string;
+  codeSnippet: string;
+  language?: string;
+  unitId?: string;
+}
+
+export interface AttachedMindmapPostItem {
+  topic: string;
+  centralInvariant: string;
+  concepts: string[];
+  connections?: string[];
+}
+
+export interface AttachedQuizPostItem {
+  question: string;
+  answer: string;
+  hint?: string;
+  category?: string;
+}
+
 export interface CommunityRoomPost {
   id: string;
   authorId: string;
@@ -803,8 +842,16 @@ export interface CommunityRoomPost {
     subtitle?: string;
     unitId?: string;
     status?: NodeStatus;
+    category?: string;
+    summarySnippet?: string;
   };
   attachedNotes?: Array<Pick<NoteItem, 'id' | 'title' | 'content' | 'tag' | 'createdAt'>>;
+  attachedHabits?: AttachedHabitPostItem[];
+  attachedMetric?: AttachedMetricPostItem;
+  attachedProject?: AttachedProjectPostItem;
+  attachedMindmap?: AttachedMindmapPostItem;
+  attachedQuiz?: AttachedQuizPostItem;
+  habitCheered?: Record<string, number>;
 }
 
 export interface CommunityRoom {

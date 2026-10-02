@@ -27,7 +27,8 @@ import {
   Gauge,
   Flame,
   ShieldCheck,
-  MessageCircleMore
+  MessageCircleMore,
+  Globe
 } from 'lucide-react';
 import { playChime } from '../../utils/audio.ts';
 import { peerCollabSync } from '../../services/peerCollabSync.ts';
@@ -53,6 +54,7 @@ interface RoomChatTabProps {
   onSelectUnit?: (unitId: string) => void;
   onAdoptProfileNode?: (snapshot: ProfileNodeSnapshot) => void;
   nodes?: DAGNode[];
+  defaultChannel?: 'general' | 'room';
 }
 
 export const RoomChatTab: React.FC<RoomChatTabProps> = ({
@@ -62,7 +64,17 @@ export const RoomChatTab: React.FC<RoomChatTabProps> = ({
   onSelectUnit,
   onAdoptProfileNode,
   nodes = [],
+  defaultChannel,
 }) => {
+  // Channel state: toggle between Global Community Chat and Room Chat
+  const [channel, setChannel] = useState<'general' | 'room'>(
+    defaultChannel || (room.id === 'community_general' ? 'general' : 'room')
+  );
+
+  const effectiveRoomId = channel === 'general' ? 'community_general' : room.id;
+  const effectiveRoomName = channel === 'general' ? 'Общий чат сообщества' : room.name;
+  const effectiveCategory = channel === 'general' ? 'Все направления & Обсуждения' : room.category;
+
   // Capture only material and project details that belong to this learning unit.
   const buildUnitSnapshot = (unit?: LearningUnit): BlockGraphicSnapshot | undefined => {
     if (!unit) return undefined;
@@ -83,13 +95,32 @@ export const RoomChatTab: React.FC<RoomChatTabProps> = ({
     };
   };
 
-  // 1. Messages State
-  const [messages, setMessages] = useState<RoomChatMessage[]>(() => {
+  const getInitialMessages = (targetRoomId: string): RoomChatMessage[] => {
     try {
-      const saved = localStorage.getItem(`room_chat_messages_${room.id}`);
+      const saved = localStorage.getItem(`room_chat_messages_${targetRoomId}`);
       if (saved) return JSON.parse(saved);
     } catch (e) {
       console.warn('Error loading chat from localStorage', e);
+    }
+    if (targetRoomId === 'community_general') {
+      return [
+        {
+          id: 'msg-general-welcome-1',
+          senderId: 'system',
+          senderName: 'Сообщество LearningOS',
+          text: `Добро пожаловать в Общий чат сообщества! 🌍\nЗдесь собираются все студенты и инженеры платформы. Обсуждайте архитектуру, делитесь идеями, задавайте вопросы по любым блокам и находите напарников для парного спарринга.`,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          pinned: true,
+        },
+        {
+          id: 'msg-general-welcome-2',
+          senderId: 'system',
+          senderName: 'Бот сообщества',
+          text: `💡 Вы можете прикреплять конспекты через кнопку «Конспект» (@note) или делиться снимком текущего изучаемого блока через «Снимок блока» (@block).`,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          attachedBlockSnapshot: buildUnitSnapshot(activeUnit)
+        }
+      ];
     }
     return [
       {
@@ -97,7 +128,7 @@ export const RoomChatTab: React.FC<RoomChatTabProps> = ({
         senderId: room.creatorId || 'system',
         senderName: room.creatorName || 'Организатор комнаты',
         senderAvatar: room.creatorAvatar,
-        text: `Добро пожаловать в учебную комнату «${room.name}»! 🚀\nЗдесь можно задавать вопросы, прикреплять конспекты через @note и делиться реальным графическим скриншотом текущего блока через @block или кнопку «📸 Текущий блок».`,
+        text: `Добро пожаловать в учебную комнату «${room.name}»! 🚀\nЗдесь можно задавать вопросы по теме комнаты, прикреплять конспекты через @note и делиться снимком текущего блока.`,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         pinned: true,
       },
@@ -110,7 +141,15 @@ export const RoomChatTab: React.FC<RoomChatTabProps> = ({
         attachedBlockSnapshot: buildUnitSnapshot(activeUnit)
       }
     ];
-  });
+  };
+
+  // 1. Messages State
+  const [messages, setMessages] = useState<RoomChatMessage[]>(() => getInitialMessages(effectiveRoomId));
+
+  // Sync messages when channel changes
+  useEffect(() => {
+    setMessages(getInitialMessages(effectiveRoomId));
+  }, [effectiveRoomId]);
 
   const [inputMessage, setInputMessage] = useState('');
   const [pendingNotes, setPendingNotes] = useState<NoteAttachment[]>([]);
@@ -142,6 +181,7 @@ export const RoomChatTab: React.FC<RoomChatTabProps> = ({
   // Active reading modal for opened note
   const [activeViewingNote, setActiveViewingNote] = useState<NoteAttachment | null>(null);
   const [copiedNoteContent, setCopiedNoteContent] = useState(false);
+  const [showParticipantsSidebar, setShowParticipantsSidebar] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -601,7 +641,7 @@ export const RoomChatTab: React.FC<RoomChatTabProps> = ({
 
   // Realtime Firestore Chat Subscription
   useEffect(() => {
-    const unsubscribeFirestore = communityRoomService.subscribeChatMessages(room.id, (firestoreMsgs) => {
+    const unsubscribeFirestore = communityRoomService.subscribeChatMessages(effectiveRoomId, (firestoreMsgs) => {
       if (firestoreMsgs.length > 0) {
         setMessages((prev) => {
           const map = new Map<string, RoomChatMessage>();
@@ -615,16 +655,16 @@ export const RoomChatTab: React.FC<RoomChatTabProps> = ({
     return () => {
       unsubscribeFirestore();
     };
-  }, [room.id]);
+  }, [effectiveRoomId]);
 
   // Auto-save to localStorage
   useEffect(() => {
     try {
-      localStorage.setItem(`room_chat_messages_${room.id}`, JSON.stringify(messages));
+      localStorage.setItem(`room_chat_messages_${effectiveRoomId}`, JSON.stringify(messages));
     } catch (e) {
       console.warn('Failed to save chat', e);
     }
-  }, [messages, room.id]);
+  }, [messages, effectiveRoomId]);
 
   // Scroll to bottom on new message
   useEffect(() => {
@@ -635,16 +675,19 @@ export const RoomChatTab: React.FC<RoomChatTabProps> = ({
   useEffect(() => {
     const unsub = peerCollabSync.subscribeActions((action) => {
       if (action.actionType === 'room_chat_message' && action.payload?.message) {
-        const incomingMsg = action.payload.message as RoomChatMessage;
-        setMessages((prev) => {
-          if (prev.some((m) => m.id === incomingMsg.id)) return prev;
-          playChime('click');
-          return [...prev, incomingMsg];
-        });
+        const incomingRoomId = action.payload.roomId || room.id;
+        if (incomingRoomId === effectiveRoomId) {
+          const incomingMsg = action.payload.message as RoomChatMessage;
+          setMessages((prev) => {
+            if (prev.some((m) => m.id === incomingMsg.id)) return prev;
+            playChime('click');
+            return [...prev, incomingMsg];
+          });
+        }
       }
     });
     return () => unsub();
-  }, []);
+  }, [effectiveRoomId, room.id]);
 
   // Detect "@" / "@note" / "@block" typing in input
   const handleInputChange = (val: string) => {
@@ -750,7 +793,7 @@ export const RoomChatTab: React.FC<RoomChatTabProps> = ({
     playChime('click');
 
     // 1. Save to Firestore
-    communityRoomService.sendChatMessage(room.id, {
+    communityRoomService.sendChatMessage(effectiveRoomId, {
       senderId: newMsg.senderId,
       senderName: newMsg.senderName,
       senderAvatar: newMsg.senderAvatar,
@@ -761,7 +804,7 @@ export const RoomChatTab: React.FC<RoomChatTabProps> = ({
     }).catch(err => console.warn('Chat Firestore save err:', err));
 
     // 2. Broadcast via WebRTC sync to active peers
-    peerCollabSync.broadcastAction('room_chat_message', { message: newMsg });
+    peerCollabSync.broadcastAction('room_chat_message', { message: newMsg, roomId: effectiveRoomId });
   };
 
   const handleCopyMessage = (msg: RoomChatMessage) => {
@@ -778,34 +821,64 @@ export const RoomChatTab: React.FC<RoomChatTabProps> = ({
   };
 
   return (
-    <div className="flex flex-col h-full bg-white text-gray-900 select-none font-sans relative">
-      {/* 1. TOP HEADER */}
-      <div className="px-5 py-3 border-b border-gray-200 bg-white flex items-center justify-between shrink-0 shadow-2xs z-20">
-        <div className="flex items-center space-x-3">
-          <div className="w-8 h-8 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center font-bold text-xs border border-blue-100">
-            <MessageSquare className="w-4 h-4" />
+    <div className="flex flex-col h-full bg-white text-slate-900 select-text font-sans relative overflow-hidden">
+      {/* 1. COMPACT CONTEXTUAL UTILITY TOOLBAR */}
+      <div className="h-12 px-3 sm:px-4 border-b border-slate-200/90 bg-white flex items-center justify-between shrink-0 z-20 shadow-2xs gap-2">
+        <div className="flex items-center space-x-2 text-xs min-w-0">
+          {/* Segmented Channel Switcher */}
+          <div className="flex items-center p-0.5 bg-slate-100 rounded-lg border border-slate-200/90 shrink-0">
+            <button
+              type="button"
+              onClick={() => {
+                setChannel('general');
+                playChime('click');
+              }}
+              className={`px-2.5 py-1 text-xs font-semibold rounded-md transition cursor-pointer flex items-center space-x-1.5 ${
+                channel === 'general'
+                  ? 'bg-white text-blue-600 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <Globe className="w-3.5 h-3.5 text-blue-600" />
+              <span>Общий чат</span>
+            </button>
+
+            {room.id !== 'community_general' && (
+              <button
+                type="button"
+                onClick={() => {
+                  setChannel('room');
+                  playChime('click');
+                }}
+                className={`px-2.5 py-1 text-xs font-semibold rounded-md transition cursor-pointer flex items-center space-x-1.5 ${
+                  channel === 'room'
+                    ? 'bg-white text-blue-600 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <MessageSquare className="w-3.5 h-3.5 text-blue-600" />
+                <span className="truncate max-w-[120px] sm:max-w-[170px]">{room.name}</span>
+              </button>
+            )}
           </div>
-          <div>
-            <h3 className="font-bold text-xs text-gray-900 flex items-center space-x-2">
-              <span>Чат комнаты: {room.name}</span>
-            </h3>
-            <p className="text-[11px] text-gray-500">
-              Синхронизация сообщений, заметок и графических снимков блоков обучения.
-            </p>
-          </div>
+
+          <span className="text-slate-300 hidden md:inline">·</span>
+          <span className="text-slate-500 text-xs truncate hidden md:inline">
+            {effectiveCategory}
+          </span>
         </div>
 
         {/* Action buttons */}
-        <div className="flex items-center space-x-2">
+        <div className="flex items-center space-x-1.5 shrink-0">
           {/* Share Block Snapshot button */}
           <button
             type="button"
             onClick={() => handleAttachCurrentBlockSnapshot()}
-            title="Поделиться реалистичным графическим снимком текущего блока"
-            className="px-3 py-1.5 rounded-xl bg-cyan-50 hover:bg-cyan-100 text-cyan-800 text-xs font-semibold transition cursor-pointer flex items-center space-x-1.5 border border-cyan-200 shadow-2xs"
+            title="Поделиться графическим снимком текущего блока"
+            className="px-2.5 py-1 rounded-lg bg-sky-50 hover:bg-sky-100 text-sky-700 text-xs font-medium transition cursor-pointer flex items-center space-x-1.5 border border-sky-200/80"
           >
-            <Camera className="w-3.5 h-3.5 text-cyan-600" />
-            <span>📸 Текущий блок</span>
+            <Camera className="w-3.5 h-3.5 text-sky-600" />
+            <span className="hidden sm:inline">Снимок блока</span>
           </button>
 
           {/* Attach Note button */}
@@ -815,437 +888,468 @@ export const RoomChatTab: React.FC<RoomChatTabProps> = ({
               setIsNotePickerModalOpen(true);
               playChime('click');
             }}
-            className="px-3 py-1.5 rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-semibold transition cursor-pointer flex items-center space-x-1.5 border border-blue-200 shadow-2xs"
+            title="Прикрепить конспект из блокнота"
+            className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium transition cursor-pointer flex items-center space-x-1.5 border border-slate-200"
           >
-            <BookOpen className="w-3.5 h-3.5" />
-            <span>@ Заметка</span>
-          </button>
-        </div>
-      </div>
-
-      <div className="flex flex-1 min-h-0">
-        <div className="flex-1 min-w-0">
-          {/* 2. MESSAGES STREAM */}
-          <div className="flex-1 overflow-y-auto p-5 space-y-4 bg-[#fafbfc]">
-            {messages.map((msg) => {
-              const isMe = msg.senderId === myUserId;
-              const isSystem = msg.senderId === 'system';
-
-              if (isSystem) {
-                return (
-                  <div key={msg.id} className="flex items-start justify-center my-3">
-                    <div className="max-w-2xl w-full p-4 rounded-2xl bg-white border border-blue-100 shadow-2xs space-y-2">
-                      <div className="flex items-center justify-between text-[11px] text-blue-600 font-bold uppercase tracking-wider">
-                        <span className="flex items-center space-x-1">
-                          <Sparkles className="w-3.5 h-3.5" />
-                          <span>{msg.senderName}</span>
-                        </span>
-                        <span className="text-gray-400">{msg.timestamp}</span>
-                      </div>
-                      {msg.text && (
-                        <p className="text-xs text-gray-700 leading-relaxed whitespace-pre-line">
-                          {msg.text}
-                        </p>
-                      )}
-
-                      {/* Graphic Block Snapshot inside System Message */}
-                      {msg.attachedBlockSnapshot && (
-                        <div className="pt-2">
-                          <BlockGraphicSnapshotCard
-                            snapshot={msg.attachedBlockSnapshot}
-                            onSelectUnit={onSelectUnit}
-                          />
-                        </div>
-                      )}
-
-                      {/* Attached Notes inside System Tip */}
-                      {msg.attachedNotes && msg.attachedNotes.length > 0 && (
-                        <div className="pt-2 border-t border-blue-50 space-y-1.5">
-                          {msg.attachedNotes.map((att) => (
-                            <button
-                              key={att.id}
-                              type="button"
-                              onClick={() => handleOpenNoteViewer(att)}
-                              className="w-full text-left p-2.5 rounded-xl bg-blue-50/70 hover:bg-blue-100/80 border border-blue-200/60 transition cursor-pointer flex items-center justify-between group"
-                            >
-                              <div className="flex items-center space-x-2.5 min-w-0">
-                                <FileText className="w-4 h-4 text-blue-600 shrink-0" />
-                                <div className="truncate">
-                                  <span className="font-bold text-xs text-blue-900 block truncate group-hover:underline">
-                                    {att.title}
-                                  </span>
-                                  <span className="text-[10px] text-blue-600 font-medium">
-                                    {att.tag || '#конспект'} • Открыть запись
-                                  </span>
-                                </div>
-                              </div>
-                              <ExternalLink className="w-3.5 h-3.5 text-blue-500 opacity-0 group-hover:opacity-100 transition shrink-0" />
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                );
-              }
-
-              return (
-                <div
-                  key={msg.id}
-                  className={`flex items-start space-x-3 group ${isMe ? 'flex-row-reverse space-x-reverse' : ''}`}
-                >
-                  {/* Avatar */}
-                  {msg.senderAvatar ? (
-                    <button type="button" onClick={() => handleProfileOpen(msg.senderId)} className="cursor-pointer">
-                      <img
-                        src={msg.senderAvatar}
-                        alt={msg.senderName}
-                        className="w-8 h-8 rounded-full object-cover border border-gray-200 shrink-0 mt-0.5"
-                      />
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => handleProfileOpen(msg.senderId)}
-                      className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs shrink-0 mt-0.5 border cursor-pointer ${
-                        isMe
-                          ? 'bg-blue-600 text-white border-blue-700'
-                          : 'bg-gray-100 text-gray-700 border-gray-200'
-                      }`}
-                    >
-                      {msg.senderName.substring(0, 2).toUpperCase()}
-                    </button>
-                  )}
-
-                  {/* Message Bubble */}
-                  <div className={`max-w-[85%] space-y-1 ${isMe ? 'items-end' : 'items-start'}`}>
-                    <div className={`flex items-center space-x-2 text-[11px] text-gray-400 px-1 ${isMe ? 'justify-end' : ''}`}>
-                      <button type="button" onClick={() => handleProfileOpen(msg.senderId)} className="font-semibold text-gray-700 hover:text-blue-600 cursor-pointer">
-                        {msg.senderName}
-                      </button>
-                      <span>{msg.timestamp}</span>
-                    </div>
-
-                    <div
-                      className={`p-4 rounded-2xl text-xs leading-relaxed shadow-2xs relative ${
-                        isMe
-                          ? 'bg-blue-600 text-white rounded-tr-none'
-                          : 'bg-white text-gray-900 border border-gray-200 rounded-tl-none'
-                      }`}
-                    >
-                      {/* Text content */}
-                      {msg.text && (
-                        <div className="whitespace-pre-wrap break-words font-sans">
-                          {msg.text}
-                        </div>
-                      )}
-
-                      {/* REALISTIC GRAPHIC BLOCK SNAPSHOT CARD IN MESSAGE */}
-                      {msg.attachedBlockSnapshot && (
-                        <div className="mt-3">
-                          <BlockGraphicSnapshotCard
-                            snapshot={msg.attachedBlockSnapshot}
-                            onSelectUnit={onSelectUnit}
-                          />
-                        </div>
-                      )}
-
-                      {/* Attached Notes Cards */}
-                      {msg.attachedNotes && msg.attachedNotes.length > 0 && (
-                        <div className={`mt-3 pt-2.5 space-y-2 border-t ${isMe ? 'border-blue-500/50' : 'border-gray-100'}`}>
-                          {msg.attachedNotes.map((note) => (
-                            <div
-                              key={note.id}
-                              onClick={() => handleOpenNoteViewer(note)}
-                              className={`p-3 rounded-xl transition cursor-pointer flex items-center justify-between ${
-                                isMe
-                                  ? 'bg-blue-700/80 hover:bg-blue-700 text-white border border-blue-400/40'
-                                  : 'bg-[#f8f9fa] hover:bg-blue-50/60 text-gray-900 border border-gray-200'
-                              }`}
-                            >
-                              <div className="flex items-center space-x-2.5 min-w-0">
-                                <div className={`p-1.5 rounded-lg shrink-0 ${isMe ? 'bg-blue-800 text-white' : 'bg-blue-100 text-blue-700'}`}>
-                                  <BookOpen className="w-4 h-4" />
-                                </div>
-                                <div className="min-w-0">
-                                  <span className="font-bold text-xs block truncate">
-                                    📝 {note.title}
-                                  </span>
-                                  <span className={`text-[10px] block truncate ${isMe ? 'text-blue-200' : 'text-gray-500'}`}>
-                                    {note.tag || '#конспект'} • Открыть запись блокнота
-                                  </span>
-                                </div>
-                              </div>
-                              <ExternalLink className={`w-3.5 h-3.5 shrink-0 ml-2 ${isMe ? 'text-blue-200' : 'text-gray-400'}`} />
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Bubble Tools */}
-                    <div className={`flex items-center space-x-1 opacity-0 group-hover:opacity-100 transition px-1 ${isMe ? 'justify-end' : ''}`}>
-                      <button
-                        type="button"
-                        onClick={() => handleCopyMessage(msg)}
-                        className="p-1 text-gray-400 hover:text-gray-600 rounded cursor-pointer"
-                        title="Копировать текст"
-                      >
-                        {copiedMsgId === msg.id ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-            <div ref={messagesEndRef} />
-          </div>
-        </div>
-
-        <aside className="hidden xl:flex w-[280px] border-l border-gray-200 bg-[#f7f9fc] p-3 flex-col gap-3 overflow-y-auto">
-          <div className="flex items-center justify-between px-2 py-1">
-            <span className="text-[11px] font-bold uppercase tracking-[0.15em] text-gray-500">Участники</span>
-            <Users className="w-3.5 h-3.5 text-gray-500" />
-          </div>
-
-          {participants.map((participant) => {
-            const profile = profileMap[participant.uid] || makeProfile(participant);
-            const isChosen = selectedProfileId === participant.uid || (!selectedProfileId && participant.uid === myUserId);
-            return (
-              <button
-                key={participant.uid}
-                type="button"
-                onClick={() => handleProfileOpen(participant.uid)}
-                className={`w-full rounded-2xl border p-2.5 text-left transition ${isChosen ? 'border-blue-200 bg-white shadow-sm' : 'border-gray-200 bg-white/70 hover:border-blue-200 hover:bg-white'}`}
-              >
-                <div className="flex items-center space-x-3">
-                  {profile.avatar ? (
-                    <img src={profile.avatar} alt={profile.displayName} className="w-10 h-10 rounded-full object-cover border border-gray-200" />
-                  ) : (
-                    <div className="w-10 h-10 rounded-full bg-gray-100 text-gray-700 border border-gray-200 flex items-center justify-center text-[11px] font-bold">
-                      {profile.displayName.substring(0, 2).toUpperCase()}
-                    </div>
-                  )}
-
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs font-semibold text-gray-900 truncate">{profile.displayName}</span>
-                      <span className={`h-2.5 w-2.5 rounded-full ${profile.status === 'focus' ? 'bg-emerald-500 animate-pulse' : profile.status === 'idle' ? 'bg-amber-400' : 'bg-slate-400'}`} />
-                    </div>
-                    <p className="text-[10px] text-gray-500 truncate">{profile.specialty}</p>
-                    <div className="mt-1 flex items-center gap-2">
-                      <span className="px-1.5 py-0.5 rounded-full bg-blue-50 text-[9px] font-semibold text-blue-700">{profile.ringProgress}%</span>
-                      <span className="text-[9px] text-gray-500">прогресс курса</span>
-                    </div>
-                  </div>
-                </div>
-              </button>
-            );
-          })}
-
-          {activePartnerProfile && (
-            <div className="rounded-2xl border border-indigo-200 bg-gradient-to-br from-indigo-50 to-white p-3 shadow-sm">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-[10px] font-bold uppercase tracking-[0.15em] text-indigo-700">Партнёр</span>
-                <ShieldCheck className="w-3.5 h-3.5 text-indigo-600" />
-              </div>
-
-              <div className="space-y-2">
-                <div className="flex items-center gap-2">
-                  {activePartnerProfile.avatar ? (
-                    <img src={activePartnerProfile.avatar} alt={activePartnerProfile.displayName} className="w-8 h-8 rounded-full object-cover border border-indigo-200" />
-                  ) : (
-                    <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-700 border border-indigo-200 flex items-center justify-center text-[10px] font-bold">
-                      {activePartnerProfile.displayName.substring(0, 2).toUpperCase()}
-                    </div>
-                  )}
-                  <div>
-                    <div className="text-xs font-semibold text-gray-900">{activePartnerProfile.displayName}</div>
-                    <div className="text-[10px] text-gray-500">{activePartnerRequest?.pairTask.nodeTitle || 'Парная ветка'}</div>
-                  </div>
-                </div>
-
-                <div className="rounded-xl bg-white border border-indigo-100 p-2">
-                  <div className="text-[10px] font-semibold text-indigo-700 uppercase tracking-[0.1em]">Pair task</div>
-                  <div className="mt-1 text-xs font-medium text-gray-900">{activePartnerRequest?.pairTask.title}</div>
-                  <p className="mt-1 text-[10px] leading-relaxed text-gray-600">{activePartnerRequest?.pairTask.brief}</p>
-                </div>
-              </div>
-            </div>
-          )}
-        </aside>
-      </div>
-
-      {/* 3. PENDING ATTACHMENTS (Pills above input) */}
-      {(pendingNotes.length > 0 || pendingBlockSnapshot) && (
-        <div className="px-5 py-2.5 bg-blue-50/90 border-t border-blue-200 flex flex-wrap gap-2 items-center">
-          <span className="text-[11px] font-bold text-blue-900 flex items-center space-x-1">
-            <Sparkles className="w-3.5 h-3.5 text-blue-600" />
-            <span>Прикреплено:</span>
-          </span>
-
-          {/* Pending Block Snapshot */}
-          {pendingBlockSnapshot && (
-            <div className="px-3 py-1 rounded-xl bg-slate-900 text-cyan-300 text-xs font-medium flex items-center space-x-2 border border-slate-700 shadow-2xs">
-              <Camera className="w-3.5 h-3.5 text-cyan-400" />
-              <span>📸 Снимок блока: {pendingBlockSnapshot.title.slice(0, 28)}...</span>
-              <button
-                type="button"
-                onClick={handleRemovePendingBlock}
-                className="text-slate-400 hover:text-rose-400 p-0.5 cursor-pointer ml-1"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          )}
-
-          {/* Pending Notes */}
-          {pendingNotes.map((note) => (
-            <div
-              key={note.id}
-              className="px-2.5 py-1 rounded-xl bg-white border border-blue-300 text-xs text-blue-900 font-medium flex items-center space-x-1.5 shadow-2xs"
-            >
-              <span>📝 {note.title}</span>
-              <button
-                type="button"
-                onClick={() => handleRemovePendingNote(note.id)}
-                className="text-gray-400 hover:text-rose-600 p-0.5 cursor-pointer"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* 4. LIVE @NOTE / @BLOCK AUTOCOMPLETE POPOVER */}
-      {showMentionPopover && (
-        <div className="absolute bottom-20 left-5 right-5 sm:left-12 sm:right-12 max-h-72 bg-white rounded-2xl border border-blue-200 shadow-2xl overflow-hidden z-30 flex flex-col animate-scaleUp">
-          <div className="px-4 py-2 bg-gradient-to-r from-blue-50 to-indigo-50 border-b border-blue-100 flex items-center justify-between text-xs text-blue-900 font-bold">
-            <span className="flex items-center space-x-1.5">
-              <AtSign className="w-3.5 h-3.5 text-blue-600" />
-              <span>Выберите, чем поделиться (@block или @note):</span>
-            </span>
-            <button
-              type="button"
-              onClick={() => setShowMentionPopover(false)}
-              className="text-gray-400 hover:text-gray-600"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
-          </div>
-
-          <div className="overflow-y-auto max-h-60 divide-y divide-gray-100 p-1">
-            {/* Quick action: Share active unit snapshot */}
-            {(mentionType === 'all' || mentionType === 'block') && (
-              <button
-                type="button"
-                onClick={() => handleAttachCurrentBlockSnapshot()}
-                className="w-full text-left p-3 hover:bg-cyan-50/80 rounded-xl transition cursor-pointer flex items-center justify-between group bg-cyan-50/30"
-              >
-                <div className="flex items-center space-x-2.5 min-w-0 pr-2">
-                  <div className="p-1.5 rounded-lg bg-cyan-600 text-white shrink-0">
-                    <Camera className="w-4 h-4" />
-                  </div>
-                  <div className="min-w-0">
-                    <span className="font-bold text-xs text-cyan-950 block truncate group-hover:text-cyan-700">
-                      📸 Текущий блок: {activeUnit?.title || 'Блок не выбран'}
-                    </span>
-                    <p className="text-[10px] text-cyan-700 mt-0.5">
-                      Прикрепит краткое превью реального материала и задания блока
-                    </p>
-                  </div>
-                </div>
-                <span className="px-2 py-0.5 rounded-md bg-cyan-100 text-[10px] text-cyan-800 font-bold shrink-0">
-                  {activeUnit ? 'Текущий блок' : 'Не выбран'}
-                </span>
-              </button>
-            )}
-
-            {/* Notes List */}
-            {(mentionType === 'all' || mentionType === 'note') && filteredMentionNotes.map((note) => (
-              <button
-                key={note.id}
-                type="button"
-                onClick={() => handleSelectMentionNote(note)}
-                className="w-full text-left p-2.5 hover:bg-blue-50/80 rounded-xl transition cursor-pointer flex items-center justify-between group"
-              >
-                <div className="min-w-0 pr-2">
-                  <span className="font-bold text-xs text-gray-900 block truncate group-hover:text-blue-700">
-                    📝 {note.title}
-                  </span>
-                  <p className="text-[11px] text-gray-500 line-clamp-1 mt-0.5">
-                    {note.content.substring(0, 90)}...
-                  </p>
-                </div>
-                <span className="px-2 py-0.5 rounded-md bg-gray-100 text-[10px] text-gray-600 shrink-0 font-medium">
-                  {note.tag}
-                </span>
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* 5. BOTTOM INPUT BAR */}
-      <div className="p-4 border-t border-gray-200 bg-white shrink-0">
-        <div className="flex items-end space-x-2">
-          {/* Quick Snapshot Share Button */}
-          <button
-            type="button"
-            onClick={() => handleAttachCurrentBlockSnapshot()}
-            title="Прикрепить графический снимок текущего блока (@block)"
-            className="p-2.5 rounded-xl bg-cyan-50 hover:bg-cyan-100 text-cyan-800 transition cursor-pointer shrink-0 border border-cyan-200"
-          >
-            <Camera className="w-4 h-4 text-cyan-600" />
+            <BookOpen className="w-3.5 h-3.5 text-slate-600" />
+            <span className="hidden sm:inline">Конспект</span>
           </button>
 
-          {/* Tag Note Button */}
+          {/* Participants toggle button */}
           <button
             type="button"
             onClick={() => {
-              setIsNotePickerModalOpen(true);
+              setShowParticipantsSidebar((prev) => !prev);
               playChime('click');
             }}
-            title="Прикрепить запись из блокнота (@note)"
-            className="p-2.5 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 transition cursor-pointer shrink-0 border border-gray-200"
+            title={showParticipantsSidebar ? 'Скрыть участников' : 'Показать участников'}
+            className={`px-2.5 py-1 rounded-lg text-xs font-medium transition cursor-pointer flex items-center space-x-1.5 border ${
+              showParticipantsSidebar
+                ? 'bg-blue-50 text-blue-700 border-blue-200'
+                : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+            }`}
           >
-            <AtSign className="w-4 h-4 text-blue-600" />
-          </button>
-
-          {/* Text Area */}
-          <div className="flex-1 relative">
-            <textarea
-              ref={textareaRef}
-              rows={2}
-              placeholder="Напишите сообщение... Введите @block для снимка блока или @note для конспекта"
-              value={inputMessage}
-              onChange={(e) => handleInputChange(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  handleSendMessage();
-                }
-              }}
-              className="w-full px-4 py-2.5 rounded-2xl bg-gray-50 border border-gray-200 focus:bg-white focus:border-blue-500 focus:outline-none text-xs text-gray-900 resize-none transition shadow-2xs"
-            />
-          </div>
-
-          {/* Send Button */}
-          <button
-            type="button"
-            onClick={handleSendMessage}
-            disabled={!inputMessage.trim() && pendingNotes.length === 0 && !pendingBlockSnapshot}
-            className="p-2.5 rounded-2xl bg-blue-600 hover:bg-blue-700 disabled:opacity-40 disabled:hover:bg-blue-600 text-white font-semibold transition cursor-pointer shrink-0 shadow-xs"
-          >
-            <Send className="w-4 h-4" />
+            <Users className="w-3.5 h-3.5" />
+            <span>{participants.length}</span>
           </button>
         </div>
+      </div>
+
+      {/* 2. CHAT BODY WITH INTEGRATED INPUT & OPTIONAL SIDEBAR */}
+      <div className="flex flex-1 min-h-0 overflow-hidden relative">
+        {/* Main Chat Column */}
+        <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden bg-slate-50/50">
+          {/* Messages Stream */}
+          <div className="flex-1 overflow-y-auto px-4 py-4 sm:px-6 space-y-4 custom-scrollbar">
+            {messages.length === 0 ? (
+              <div className="h-full flex flex-col items-center justify-center text-center p-6 space-y-3 text-slate-400">
+                <MessageSquare className="w-10 h-10 stroke-[1.5]" />
+                <p className="text-xs max-w-sm leading-relaxed">
+                  В этой комнате еще нет сообщений. Напишите первым или прикрепите конспект!
+                </p>
+              </div>
+            ) : (
+              messages.map((msg) => {
+                const isMe = msg.senderId === myUserId;
+                const isSystem = msg.senderId === 'system';
+
+                if (isSystem) {
+                  return (
+                    <div key={msg.id} className="flex items-start justify-center my-2">
+                      <div className="max-w-xl w-full p-4 rounded-2xl bg-white border border-slate-200/80 shadow-2xs space-y-2.5">
+                        <div className="flex items-center justify-between text-[11px] text-indigo-600 font-semibold uppercase tracking-wider">
+                          <span className="flex items-center space-x-1.5">
+                            <Sparkles className="w-3.5 h-3.5 text-indigo-500" />
+                            <span>{msg.senderName}</span>
+                          </span>
+                          <span className="text-slate-400 font-normal font-mono text-[10px]">{msg.timestamp}</span>
+                        </div>
+                        {msg.text && (
+                          <p className="text-xs text-slate-700 leading-relaxed whitespace-pre-line">
+                            {msg.text}
+                          </p>
+                        )}
+
+                        {/* Graphic Block Snapshot inside System Message */}
+                        {msg.attachedBlockSnapshot && (
+                          <div className="pt-1">
+                            <BlockGraphicSnapshotCard
+                              snapshot={msg.attachedBlockSnapshot}
+                              onSelectUnit={onSelectUnit}
+                            />
+                          </div>
+                        )}
+
+                        {/* Attached Notes inside System Tip */}
+                        {msg.attachedNotes && msg.attachedNotes.length > 0 && (
+                          <div className="pt-2 border-t border-slate-100 space-y-1.5">
+                            {msg.attachedNotes.map((att) => (
+                              <button
+                                key={att.id}
+                                type="button"
+                                onClick={() => handleOpenNoteViewer(att)}
+                                className="w-full text-left p-2.5 rounded-xl bg-slate-50 hover:bg-indigo-50/70 border border-slate-200/80 transition cursor-pointer flex items-center justify-between group"
+                              >
+                                <div className="flex items-center space-x-2.5 min-w-0">
+                                  <FileText className="w-4 h-4 text-indigo-600 shrink-0" />
+                                  <div className="truncate">
+                                    <span className="font-semibold text-xs text-slate-900 block truncate group-hover:text-indigo-600">
+                                      {att.title}
+                                    </span>
+                                    <span className="text-[10px] text-slate-500">
+                                      {att.tag || '#конспект'} · Открыть запись
+                                    </span>
+                                  </div>
+                                </div>
+                                <ExternalLink className="w-3.5 h-3.5 text-slate-400 opacity-0 group-hover:opacity-100 transition shrink-0" />
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div
+                    key={msg.id}
+                    className={`flex items-end space-x-2.5 group ${isMe ? 'flex-row-reverse space-x-reverse' : ''}`}
+                  >
+                    {/* Avatar */}
+                    {msg.senderAvatar ? (
+                      <button type="button" onClick={() => handleProfileOpen(msg.senderId)} className="cursor-pointer shrink-0 mb-1">
+                        <img
+                          src={msg.senderAvatar}
+                          alt={msg.senderName}
+                          className="w-7 h-7 rounded-full object-cover border border-slate-200 shadow-2xs"
+                        />
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => handleProfileOpen(msg.senderId)}
+                        className={`w-7 h-7 rounded-full flex items-center justify-center font-bold text-[10px] shrink-0 mb-1 border shadow-2xs cursor-pointer ${
+                          isMe
+                            ? 'bg-slate-900 text-white border-slate-800'
+                            : 'bg-slate-100 text-slate-700 border-slate-200'
+                        }`}
+                      >
+                        {msg.senderName.substring(0, 2).toUpperCase()}
+                      </button>
+                    )}
+
+                    {/* Message Bubble Container */}
+                    <div className={`flex flex-col max-w-[85%] sm:max-w-[76%] space-y-1 ${isMe ? 'items-end' : 'items-start'}`}>
+                      <div className={`flex items-center space-x-2 text-[10px] text-slate-400 px-1 ${isMe ? 'justify-end' : ''}`}>
+                        {!isMe && (
+                          <button type="button" onClick={() => handleProfileOpen(msg.senderId)} className="font-semibold text-slate-700 hover:text-blue-600 cursor-pointer">
+                            {msg.senderName}
+                          </button>
+                        )}
+                        <span className="font-mono">{msg.timestamp}</span>
+                      </div>
+
+                      <div
+                        className={`p-3.5 rounded-2xl text-xs leading-relaxed shadow-2xs relative select-text ${
+                          isMe
+                            ? 'bg-blue-600 text-white rounded-tr-sm'
+                            : 'bg-white text-slate-900 border border-slate-200/90 rounded-tl-sm'
+                        }`}
+                      >
+                        {/* Text content */}
+                        {msg.text && (
+                          <div className="whitespace-pre-wrap break-words font-sans">
+                            {msg.text}
+                          </div>
+                        )}
+
+                        {/* Graphic Block Snapshot */}
+                        {msg.attachedBlockSnapshot && (
+                          <div className="mt-3">
+                            <BlockGraphicSnapshotCard
+                              snapshot={msg.attachedBlockSnapshot}
+                              onSelectUnit={onSelectUnit}
+                            />
+                          </div>
+                        )}
+
+                        {/* Attached Notes Cards */}
+                        {msg.attachedNotes && msg.attachedNotes.length > 0 && (
+                          <div className={`mt-3 pt-2.5 space-y-2 border-t ${isMe ? 'border-blue-400/40' : 'border-slate-100'}`}>
+                            {msg.attachedNotes.map((note) => (
+                              <div
+                                key={note.id}
+                                onClick={() => handleOpenNoteViewer(note)}
+                                className={`p-2.5 rounded-xl transition cursor-pointer flex items-center justify-between ${
+                                  isMe
+                                    ? 'bg-blue-700/80 hover:bg-blue-700 text-white border border-blue-400/40'
+                                    : 'bg-slate-50 hover:bg-slate-100 text-slate-900 border border-slate-200'
+                                }`}
+                              >
+                                <div className="flex items-center space-x-2 min-w-0">
+                                  <div className={`p-1 rounded-lg shrink-0 ${isMe ? 'bg-blue-800 text-white' : 'bg-blue-100 text-blue-700'}`}>
+                                    <BookOpen className="w-3.5 h-3.5" />
+                                  </div>
+                                  <div className="min-w-0">
+                                    <span className="font-semibold text-xs block truncate">
+                                      {note.title}
+                                    </span>
+                                    <span className={`text-[10px] block truncate ${isMe ? 'text-blue-100' : 'text-slate-500'}`}>
+                                      {note.tag || '#конспект'} · Открыть запись
+                                    </span>
+                                  </div>
+                                </div>
+                                <ExternalLink className={`w-3.5 h-3.5 shrink-0 ml-2 ${isMe ? 'text-blue-200' : 'text-slate-400'}`} />
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Bubble hover tools */}
+                      <div className={`flex items-center space-x-1 opacity-0 group-hover:opacity-100 transition px-1 ${isMe ? 'justify-end' : ''}`}>
+                        <button
+                          type="button"
+                          onClick={() => handleCopyMessage(msg)}
+                          className="p-1 text-slate-400 hover:text-slate-600 rounded cursor-pointer"
+                          title="Копировать текст"
+                        >
+                          {copiedMsgId === msg.id ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+            <div ref={messagesEndRef} />
+          </div>
+
+          {/* Pending Attachments Banner */}
+          {(pendingNotes.length > 0 || pendingBlockSnapshot) && (
+            <div className="px-4 py-2 bg-indigo-50/80 border-t border-indigo-100 flex flex-wrap gap-2 items-center shrink-0">
+              <span className="text-[11px] font-semibold text-indigo-900 flex items-center space-x-1">
+                <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
+                <span>Прикреплено:</span>
+              </span>
+
+              {pendingBlockSnapshot && (
+                <div className="px-2.5 py-1 rounded-lg bg-slate-900 text-cyan-300 text-xs font-medium flex items-center space-x-1.5 border border-slate-700 shadow-2xs">
+                  <Camera className="w-3.5 h-3.5 text-cyan-400" />
+                  <span className="max-w-[200px] truncate">Блок: {pendingBlockSnapshot.title}</span>
+                  <button
+                    type="button"
+                    onClick={handleRemovePendingBlock}
+                    className="text-slate-400 hover:text-rose-400 p-0.5 cursor-pointer"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+              )}
+
+              {pendingNotes.map((note) => (
+                <div
+                  key={note.id}
+                  className="px-2.5 py-1 rounded-lg bg-white border border-indigo-200 text-xs text-indigo-900 font-medium flex items-center space-x-1.5 shadow-2xs"
+                >
+                  <span className="max-w-[180px] truncate">📝 {note.title}</span>
+                  <button
+                    type="button"
+                    onClick={() => handleRemovePendingNote(note.id)}
+                    className="text-slate-400 hover:text-rose-600 p-0.5 cursor-pointer"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Bottom Chat Input Bar with relative mention popover */}
+          <div className="p-3 sm:p-4 border-t border-slate-200/90 bg-white shrink-0 relative">
+            {/* Live Autocomplete Popover */}
+            {showMentionPopover && (
+              <div className="absolute bottom-full mb-2 left-3 right-3 sm:left-4 sm:right-4 max-h-64 bg-white rounded-2xl border border-slate-200 shadow-xl overflow-hidden z-30 flex flex-col animate-scaleUp">
+                <div className="px-3.5 py-2 bg-slate-50 border-b border-slate-100 flex items-center justify-between text-xs text-slate-700 font-semibold">
+                  <span className="flex items-center space-x-1.5">
+                    <AtSign className="w-3.5 h-3.5 text-indigo-600" />
+                    <span>Быстрое прикрепление (@block или @note):</span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setShowMentionPopover(false)}
+                    className="text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+
+                <div className="overflow-y-auto max-h-52 divide-y divide-slate-100 p-1 custom-scrollbar">
+                  {(mentionType === 'all' || mentionType === 'block') && (
+                    <button
+                      type="button"
+                      onClick={() => handleAttachCurrentBlockSnapshot()}
+                      className="w-full text-left p-2.5 hover:bg-sky-50 rounded-xl transition cursor-pointer flex items-center justify-between group"
+                    >
+                      <div className="flex items-center space-x-2.5 min-w-0 pr-2">
+                        <div className="p-1.5 rounded-lg bg-sky-600 text-white shrink-0">
+                          <Camera className="w-4 h-4" />
+                        </div>
+                        <div className="min-w-0">
+                          <span className="font-semibold text-xs text-slate-900 block truncate group-hover:text-sky-700">
+                            Текущий блок: {activeUnit?.title || 'Блок не выбран'}
+                          </span>
+                          <p className="text-[10px] text-slate-500 mt-0.5">
+                            Графический снимок реального материала и задания
+                          </p>
+                        </div>
+                      </div>
+                      <span className="px-2 py-0.5 rounded-md bg-sky-100 text-[10px] text-sky-800 font-semibold shrink-0">
+                        {activeUnit ? 'Текущий' : 'Не выбран'}
+                      </span>
+                    </button>
+                  )}
+
+                  {(mentionType === 'all' || mentionType === 'note') && filteredMentionNotes.map((note) => (
+                    <button
+                      key={note.id}
+                      type="button"
+                      onClick={() => handleSelectMentionNote(note)}
+                      className="w-full text-left p-2.5 hover:bg-indigo-50/70 rounded-xl transition cursor-pointer flex items-center justify-between group"
+                    >
+                      <div className="min-w-0 pr-2">
+                        <span className="font-semibold text-xs text-slate-900 block truncate group-hover:text-indigo-700">
+                          📝 {note.title}
+                        </span>
+                        <p className="text-[11px] text-slate-500 line-clamp-1 mt-0.5">
+                          {note.content.substring(0, 90)}...
+                        </p>
+                      </div>
+                      <span className="px-2 py-0.5 rounded-md bg-slate-100 text-[10px] text-slate-600 shrink-0 font-medium">
+                        {note.tag}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Input Row */}
+            <div className="flex items-end gap-2 bg-slate-50 border border-slate-200/90 rounded-2xl p-1.5 focus-within:border-blue-500 focus-within:bg-white focus-within:ring-2 focus-within:ring-blue-100 transition shadow-2xs">
+              <button
+                type="button"
+                onClick={() => handleAttachCurrentBlockSnapshot()}
+                title="Прикрепить графический снимок текущего блока (@block)"
+                className="p-2 rounded-xl text-slate-500 hover:text-sky-600 hover:bg-sky-50 transition cursor-pointer shrink-0"
+              >
+                <Camera className="w-4 h-4" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setIsNotePickerModalOpen(true);
+                  playChime('click');
+                }}
+                title="Прикрепить запись из блокнота (@note)"
+                className="p-2 rounded-xl text-slate-500 hover:text-blue-600 hover:bg-blue-50 transition cursor-pointer shrink-0"
+              >
+                <AtSign className="w-4 h-4" />
+              </button>
+
+              <textarea
+                ref={textareaRef}
+                rows={1}
+                placeholder={
+                  channel === 'general'
+                    ? "Напишите в общий чат сообщества... (@block / @note)"
+                    : `Напишите в чат комнаты «${room.name}»... (@block / @note)`
+                }
+                value={inputMessage}
+                onChange={(e) => handleInputChange(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    handleSendMessage();
+                  }
+                }}
+                className="flex-1 bg-transparent px-2 py-1.5 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-hidden resize-none min-h-[36px] max-h-32 leading-relaxed"
+              />
+
+              <button
+                type="button"
+                onClick={handleSendMessage}
+                disabled={!inputMessage.trim() && pendingNotes.length === 0 && !pendingBlockSnapshot}
+                className="p-2 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-40 disabled:hover:bg-blue-600 text-white font-semibold transition cursor-pointer shrink-0 shadow-xs active:scale-95"
+              >
+                <Send className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="mt-1.5 flex items-center justify-between text-[10px] text-slate-400 px-1">
+              <span>Введите <span className="font-mono text-slate-600">@block</span> для снимка или <span className="font-mono text-slate-600">@note</span> для конспекта</span>
+              <span className="hidden sm:inline">Enter — отправить · Shift+Enter — перенос строки</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Collapsible Participants Sidebar */}
+        {showParticipantsSidebar && (
+          <aside className="w-64 border-l border-slate-200/90 bg-white flex flex-col h-full overflow-hidden shrink-0">
+            <div className="h-11 px-3.5 border-b border-slate-100 flex items-center justify-between text-xs shrink-0">
+              <span className="font-bold text-slate-800 flex items-center space-x-1.5">
+                <Users className="w-3.5 h-3.5 text-slate-500" />
+                <span>Участники ({participants.length})</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => setShowParticipantsSidebar(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 cursor-pointer"
+                title="Скрыть панель"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-2.5 space-y-1.5 custom-scrollbar">
+              {participants.map((participant) => {
+                const profile = profileMap[participant.uid] || makeProfile(participant);
+                const isChosen = selectedProfileId === participant.uid;
+                return (
+                  <button
+                    key={participant.uid}
+                    type="button"
+                    onClick={() => handleProfileOpen(participant.uid)}
+                    className={`w-full rounded-xl border p-2 text-left transition cursor-pointer ${
+                      isChosen ? 'border-indigo-300 bg-indigo-50/60 shadow-2xs' : 'border-slate-100 bg-white hover:border-slate-200 hover:bg-slate-50'
+                    }`}
+                  >
+                    <div className="flex items-center space-x-2.5">
+                      {profile.avatar ? (
+                        <img src={profile.avatar} alt={profile.displayName} className="w-8 h-8 rounded-full object-cover border border-slate-200 shrink-0" />
+                      ) : (
+                        <div className="w-8 h-8 rounded-full bg-slate-100 text-slate-700 border border-slate-200 flex items-center justify-center text-[10px] font-bold shrink-0">
+                          {profile.displayName.substring(0, 2).toUpperCase()}
+                        </div>
+                      )}
+
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-1">
+                          <span className="text-xs font-semibold text-slate-900 truncate">{profile.displayName}</span>
+                          <span className={`h-2 w-2 rounded-full shrink-0 ${profile.status === 'focus' ? 'bg-emerald-500 animate-pulse' : profile.status === 'idle' ? 'bg-amber-400' : 'bg-slate-300'}`} />
+                        </div>
+                        <p className="text-[10px] text-slate-500 truncate">{profile.specialty}</p>
+                        <div className="mt-1 flex items-center gap-1.5">
+                          <div className="flex-1 h-1 bg-slate-100 rounded-full overflow-hidden">
+                            <div className="h-full bg-indigo-600 rounded-full" style={{ width: `${profile.ringProgress}%` }} />
+                          </div>
+                          <span className="text-[9px] font-mono text-slate-500">{profile.ringProgress}%</span>
+                        </div>
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+
+              {activePartnerProfile && (
+                <div className="mt-3 rounded-xl border border-indigo-200 bg-gradient-to-br from-indigo-50/60 to-white p-2.5 shadow-2xs">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-[10px] font-bold text-indigo-700 uppercase tracking-wider">Парный партнёр</span>
+                    <ShieldCheck className="w-3.5 h-3.5 text-indigo-600" />
+                  </div>
+                  <div className="text-xs font-semibold text-slate-900">{activePartnerProfile.displayName}</div>
+                  <div className="text-[10px] text-slate-500 truncate">{activePartnerRequest?.pairTask.nodeTitle || 'Совместный блок'}</div>
+                </div>
+              )}
+            </div>
+          </aside>
+        )}
       </div>
 
       {/* 6. MODAL: FULL NOTE PICKER */}
       {isNotePickerModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-2xs flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl border border-gray-200 max-w-xl w-full p-6 shadow-2xl space-y-4 animate-scaleUp">
             <div className="flex items-center justify-between pb-3 border-b border-gray-100">
               <div className="flex items-center space-x-2 text-blue-700 font-bold text-sm">
@@ -1314,7 +1418,7 @@ export const RoomChatTab: React.FC<RoomChatTabProps> = ({
 
       {/* 7. MODAL: VIEW ATTACHED NOTE DETAILS */}
       {activeViewingNote && (
-        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-2xs flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl border border-gray-200 max-w-2xl w-full p-6 shadow-2xl space-y-4 animate-scaleUp">
             <div className="flex items-start justify-between pb-3 border-b border-gray-100">
               <div className="space-y-1">

@@ -16,7 +16,7 @@ import {
   Info
 } from 'lucide-react';
 import { playChime } from '../../utils/audio.ts';
-import { PeerPartner, DAGNode, LearningUnit, NoteItem, UserArtifact, CommunityRoom, ProfileNodeSnapshot } from '../../types.ts';
+import { PeerPartner, DAGNode, LearningUnit, NoteItem, HabitItem, UserArtifact, CommunityRoom, ProfileNodeSnapshot } from '../../types.ts';
 import { InfiniteWhiteboard } from '../whiteboard/InfiniteWhiteboard.tsx';
 import { RoomChatTab } from '../community/RoomChatTab.tsx';
 import { CommunityRoomsHub } from '../community/CommunityRoomsHub.tsx';
@@ -41,6 +41,7 @@ interface PeerCollabWindowProps {
   onSyncWithMainPlayer?: () => void;
   nodes?: DAGNode[];
   notes?: NoteItem[];
+  habits?: HabitItem[];
   currentUser?: { uid: string; displayName: string; email: string; photoURL?: string } | null;
   isPreviewMode?: boolean;
 }
@@ -55,6 +56,7 @@ export const PeerCollabWindow: React.FC<PeerCollabWindowProps> = ({
   onAdoptProfileNode,
   nodes,
   notes,
+  habits,
   currentUser,
   initialTab,
   onSaveNote,
@@ -126,7 +128,7 @@ export const PeerCollabWindow: React.FC<PeerCollabWindowProps> = ({
   };
 
   return (
-    <div className="flex flex-col h-full bg-white text-gray-900 select-none overflow-hidden font-sans">
+    <div className="flex flex-col h-full bg-white text-gray-900 select-text overflow-hidden font-sans">
       {/* 1. TOP GOOGLE MINIMALIST HEADER */}
       <header className="h-14 px-5 bg-white border-b border-gray-200 flex items-center justify-between shrink-0 shadow-xs z-30">
         {/* Left: Room Badge & Title */}
@@ -242,8 +244,8 @@ export const PeerCollabWindow: React.FC<PeerCollabWindowProps> = ({
         </div>
       </header>
 
-      {/* 2. BODY CONTENT (Strict Google White Minimalism) */}
-      <div className="relative flex-1 w-full h-full overflow-hidden bg-white">
+      {/* 2. BODY CONTENT */}
+      <div className="relative flex-1 min-h-0 w-full overflow-hidden bg-white">
         {activeTab === 'whiteboard' && (
           <div className="w-full h-full">
             <InfiniteWhiteboard
@@ -275,6 +277,7 @@ export const PeerCollabWindow: React.FC<PeerCollabWindowProps> = ({
                 currentUser={currentUser}
                 nodes={nodes}
                 notes={notes}
+                habits={habits}
                 activeUnitId={activeUnitId}
                 onSelectUnit={onSelectUnit}
                 onSaveNote={onSaveNote}

@@ -21,9 +21,10 @@ import {
   Layers,
   MessageSquare
 } from 'lucide-react';
-import { DAGNode, NoteItem, PeerPartner } from '../../types.ts';
+import { DAGNode, NoteItem, PeerPartner, HabitItem } from '../../types.ts';
 import { playChime } from '../../utils/audio.ts';
 import { peerCollabSync } from '../../services/peerCollabSync.ts';
+import { peerService } from '../../services/peerService.ts';
 import { CommunityRoomsHub } from '../community/CommunityRoomsHub.tsx';
 
 interface PartnerSearchWindowProps {
@@ -43,6 +44,7 @@ interface PartnerSearchWindowProps {
   onClose?: () => void;
   nodes?: DAGNode[];
   notes?: NoteItem[];
+  habits?: HabitItem[];
   activeUnitId?: string;
   onSelectUnit?: (unitId: string) => void;
   onSaveNote?: (title: string, content: string, tag: string) => void;
@@ -60,6 +62,7 @@ export const PartnerSearchWindow: React.FC<PartnerSearchWindowProps> = ({
   onClose,
   nodes,
   notes,
+  habits,
   activeUnitId,
   onSelectUnit,
   onSaveNote,
@@ -187,19 +190,69 @@ export const PartnerSearchWindow: React.FC<PartnerSearchWindowProps> = ({
     }).catch(() => {});
   };
 
-  const handleInstantConnect = () => {
+  const handleInstantConnect = async () => {
+    setMatchStatus('searching');
+    playChime('click');
+
     const randomCode = `OS-${Math.floor(1000 + Math.random() * 9000)}`;
+    const effectiveDomain = skillDomain || 'Инженерные системы';
+    const effectiveTopic = targetGoal || 'Стресс-спарринг инвариантов';
+
+    try {
+      const res = await fetch('/api/gemini/match-negotiate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          topic: effectiveTopic,
+          domain: effectiveDomain,
+          userRole: preferredRole,
+          userName: myUserName,
+          userLevel: 'intermediate',
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.matchedPartner) {
+          const partnerData = {
+            ...data.matchedPartner,
+            roomCode: data.matchedPartner.roomCode || randomCode,
+          };
+          sessionStorage.setItem('learning_os_peer_session_id', partnerData.roomCode);
+          peerCollabSync.setRoomId(partnerData.roomCode);
+          setMatchStatus('matched');
+          onPartnerMatched?.(partnerData);
+          playChime('success');
+          return;
+        }
+      }
+    } catch (e) {
+      console.warn('Instant match negotiation failed, using domain adaptation:', e);
+    }
+
+    // Dynamic domain fallback if API fails
+    const lowerDom = effectiveDomain.toLowerCase();
+    let partnerName = 'Михаил Воронов (Staff Systems Architect)';
+    if (lowerDom.includes('язык') || lowerDom.includes('english')) {
+      partnerName = 'Елена Ростова (Senior Conversation Coach)';
+    } else if (lowerDom.includes('дизайн') || lowerDom.includes('ux')) {
+      partnerName = 'Дарья Смирнова (Lead Product & UX Designer)';
+    } else if (lowerDom.includes('бухгалтер') || lowerDom.includes('финанс') || lowerDom.includes('учет')) {
+      partnerName = 'Александр Петров (Senior Financial Analyst & CPA)';
+    }
+
     const instantPartner: PeerPartner = {
       id: `peer-partner-${Date.now()}`,
-      name: 'Михаил Воронов (Staff Architect)',
+      name: partnerName,
       avatar: '',
       userLevel: 'intermediate',
-      skillDomain: skillDomain || 'Инженерные системы',
-      targetGoal: targetGoal || 'Стресс-спарринг инвариантов',
-      matchScore: 99,
+      skillDomain: effectiveDomain,
+      targetGoal: effectiveTopic,
+      matchScore: 98,
       onlineStatus: 'online',
       role: preferredRole === 'Architect' ? 'Navigator' : 'Driver',
       roomCode: randomCode,
+      dailyRoomUrl: `https://meet.jit.si/learning-os-peer-${randomCode.toLowerCase()}#config.prejoinPageEnabled=false`,
     };
 
     sessionStorage.setItem('learning_os_peer_session_id', randomCode);
@@ -242,7 +295,13 @@ export const PartnerSearchWindow: React.FC<PartnerSearchWindowProps> = ({
       onlineStatus: 'online',
       role: preferredRole === 'Architect' ? 'Navigator' : 'Driver',
       roomCode: clean,
+      dailyRoomUrl: `https://meet.jit.si/learning-os-peer-${clean.toLowerCase()}#config.prejoinPageEnabled=false`,
     };
+
+    peerService.joinSession(clean, {
+      id: myUserId,
+      name: myUserName,
+    }).catch(() => {});
 
     sessionStorage.setItem('learning_os_peer_session_id', clean);
     peerCollabSync.setRoomId(clean);
@@ -330,6 +389,7 @@ export const PartnerSearchWindow: React.FC<PartnerSearchWindowProps> = ({
               currentUser={currentUser}
               nodes={nodes}
               notes={notes}
+              habits={habits}
               activeUnitId={activeUnitId}
               onSelectUnit={onSelectUnit}
               onSaveNote={onSaveNote}

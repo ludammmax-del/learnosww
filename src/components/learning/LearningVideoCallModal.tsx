@@ -139,8 +139,12 @@ export const LearningVideoCallModal: React.FC<LearningVideoCallModalProps> = ({
   ]);
   const [customSpeechInput, setCustomSpeechInput] = useState('');
   const [copiedCertificate, setCopiedCertificate] = useState(false);
+  const [isPartnerSpeaking, setIsPartnerSpeaking] = useState(false);
+  const [isPartnerVoiceMuted, setIsPartnerVoiceMuted] = useState(false);
+  const [copiedRoomUrl, setCopiedRoomUrl] = useState(false);
 
-  // 5. Dual AI Operators Live Grades
+  // 5. Dual AI Operators Live Grades & View Mode
+  const [viewMode, setViewMode] = useState<'sparring_hud' | 'webrtc_call'>('sparring_hud');
   const [userLiveScore, setUserLiveScore] = useState<number>(88);
   const [partnerLiveScore, setPartnerLiveScore] = useState<number>(86);
   const [userCoachNote, setUserCoachNote] = useState<string>('ИИ-Оператор слушает: говорите уверенно, начинайте с главного тезиса.');
@@ -148,6 +152,34 @@ export const LearningVideoCallModal: React.FC<LearningVideoCallModalProps> = ({
   const [isEvaluatingFinal, setIsEvaluatingFinal] = useState(false);
   const [evaluationUnavailable, setEvaluationUnavailable] = useState(false);
   const [finalScorecard, setFinalScorecard] = useState<any | null>(null);
+
+  const effectiveRoomUrl = partner.dailyRoomUrl || `https://meet.jit.si/learning-os-peer-${(partner.name || 'room').replace(/[^a-zA-Z0-9]/g, '').toLowerCase() || 'session'}#config.prejoinPageEnabled=false`;
+
+  const speakPartnerMessage = (text: string) => {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window) || isPartnerVoiceMuted) return;
+    try {
+      window.speechSynthesis.cancel();
+      const cleanText = text.replace(/[*#`_~]/g, '').trim();
+      const utterance = new SpeechSynthesisUtterance(cleanText);
+      utterance.lang = 'ru-RU';
+      utterance.rate = 1.0;
+      utterance.pitch = 1.0;
+      utterance.onstart = () => setIsPartnerSpeaking(true);
+      utterance.onend = () => setIsPartnerSpeaking(false);
+      utterance.onerror = () => setIsPartnerSpeaking(false);
+      window.speechSynthesis.speak(utterance);
+    } catch (err) {
+      console.debug('SpeechSynthesis notice:', err);
+    }
+  };
+
+  const handleCopyRoomUrl = () => {
+    if (!effectiveRoomUrl) return;
+    navigator.clipboard.writeText(effectiveRoomUrl);
+    setCopiedRoomUrl(true);
+    playChime('click');
+    setTimeout(() => setCopiedRoomUrl(false), 2500);
+  };
 
   // Video & Audio Streams Refs
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
@@ -282,6 +314,9 @@ export const LearningVideoCallModal: React.FC<LearningVideoCallModalProps> = ({
       if (speechRecognitionRef.current) {
         try { speechRecognitionRef.current.stop(); } catch {}
       }
+      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+        try { window.speechSynthesis.cancel(); } catch {}
+      }
     };
   }, []);
 
@@ -371,6 +406,7 @@ export const LearningVideoCallModal: React.FC<LearningVideoCallModalProps> = ({
               setLiveTranscripts((prev) => [...prev, peerUtterance]);
               setPartnerLiveScore((prev) => Math.min(98, prev + 2));
               setPartnerCoachNote(`Оппонент протестировал граничное условие по теме «${effectiveTopic}»`);
+              speakPartnerMessage(peerUtterance.text);
               return;
             }
           }
@@ -392,6 +428,7 @@ export const LearningVideoCallModal: React.FC<LearningVideoCallModalProps> = ({
           };
           setLiveTranscripts((prev) => [...prev, fallbackUtterance]);
           setPartnerLiveScore((prev) => Math.min(98, prev + 2));
+          speakPartnerMessage(fallbackUtterance.text);
         }
       })();
     } else {
@@ -499,6 +536,9 @@ export const LearningVideoCallModal: React.FC<LearningVideoCallModalProps> = ({
     if (mediaStreamRef.current) {
       mediaStreamRef.current.getTracks().forEach((t) => t.stop());
       mediaStreamRef.current = null;
+    }
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      try { window.speechSynthesis.cancel(); } catch {}
     }
     playChime('alert');
     onClose();
@@ -642,6 +682,29 @@ export const LearningVideoCallModal: React.FC<LearningVideoCallModalProps> = ({
             <div className="hidden sm:block text-xs font-medium text-white/70">
               Тема: <span className="text-white font-semibold">«{pairTask.topic}»</span>
             </div>
+
+            {/* View Mode Switcher (Sparring HUD vs Real WebRTC video) */}
+            <div className="hidden md:flex items-center bg-white/[0.06] p-0.5 rounded-xl border border-white/10 text-xs">
+              <button
+                type="button"
+                onClick={() => { setViewMode('sparring_hud'); playChime('click'); }}
+                className={`px-2.5 py-1 rounded-lg font-medium transition cursor-pointer ${
+                  viewMode === 'sparring_hud' ? 'bg-indigo-600 text-white shadow-xs' : 'text-white/60 hover:text-white'
+                }`}
+              >
+                🎙️ Спарринг-HUD
+              </button>
+              <button
+                type="button"
+                onClick={() => { setViewMode('webrtc_call'); playChime('click'); }}
+                className={`px-2.5 py-1 rounded-lg font-medium transition cursor-pointer flex items-center space-x-1 ${
+                  viewMode === 'webrtc_call' ? 'bg-emerald-600 text-white shadow-xs' : 'text-white/60 hover:text-white'
+                }`}
+              >
+                <Video className="w-3.5 h-3.5 text-emerald-300" />
+                <span>WebRTC Звонок</span>
+              </button>
+            </div>
           </div>
 
           <div className="flex items-center space-x-2.5">
@@ -679,113 +742,188 @@ export const LearningVideoCallModal: React.FC<LearningVideoCallModalProps> = ({
         {/* Main Body: 2 Main Columns (Video/Role Arena + Live Speech & Dual AI Evaluation Stream) */}
         <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 overflow-hidden">
           
-          {/* LEFT 7 COLS: Video Arena & Interactive Role Cards */}
+          {/* LEFT 7 COLS: Video Arena & Interactive Role Cards or WebRTC Call */}
           <div className="lg:col-span-7 flex flex-col justify-between p-4 sm:p-5 border-r border-white/10 bg-slate-900/40 space-y-4 overflow-y-auto custom-scrollbar">
             
-            {/* Dual Video Feeds */}
-            <div className="grid grid-cols-2 gap-3 h-52 sm:h-60">
-              
-              {/* Partner Video Tile */}
-              <div className="relative rounded-2xl overflow-hidden bg-slate-950 border border-white/10 flex flex-col items-center justify-center group shadow-lg">
-                {partner.avatar ? (
-                  <img src={partner.avatar} alt={partner.name || 'Напарник'} className="w-full h-full object-cover filter brightness-95" />
-                ) : (
-                  <div className="flex flex-col items-center justify-center text-slate-300">
-                    <div className="w-14 h-14 rounded-2xl bg-indigo-950 border border-indigo-400/40 text-indigo-300 font-extrabold flex items-center justify-center text-lg shadow-xl mb-2">
-                      {(partner.name || 'Напарник').substring(0, 2).toUpperCase()}
-                    </div>
-                    <span className="text-xs font-semibold text-white">@{partner.name || 'Напарник'}</span>
+            {viewMode === 'webrtc_call' ? (
+              <div className="flex-1 flex flex-col h-full space-y-3 min-h-[420px]">
+                {/* WebRTC Status and Sharing Bar */}
+                <div className="flex flex-wrap items-center justify-between gap-2 p-3 bg-white/[0.04] border border-white/10 rounded-2xl">
+                  <div className="flex items-center space-x-2">
+                    <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
+                    <span className="text-xs font-semibold text-emerald-300">Прямой WebRTC P2P видеоканал</span>
+                    <span className="text-[11px] font-mono text-white/50">({partner.name})</span>
                   </div>
-                )}
-                <div className="absolute top-2 left-2 px-2 py-0.5 rounded-lg bg-black/60 border border-white/10 text-[10px] font-mono text-emerald-400 flex items-center space-x-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                  <span>{partnerCurrentRole.badge}</span>
-                </div>
-                <div className="absolute bottom-2 right-2 px-2 py-0.5 rounded-lg bg-black/70 text-[10px] font-mono text-white/80">
-                  {partner.role}
-                </div>
-              </div>
 
-              {/* Local User Video Tile */}
-              <div className="relative rounded-2xl overflow-hidden bg-slate-950 border border-white/10 flex flex-col items-center justify-center shadow-lg">
-                {isVideoOff ? (
-                  <div className="flex flex-col items-center justify-center text-white/40 text-xs">
-                    <VideoOff className="w-8 h-8 mb-1" />
-                    <span>Камера выключена</span>
-                  </div>
-                ) : hasCameraPermission ? (
-                  <video ref={localVideoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
-                ) : (
-                  <div className="flex flex-col items-center justify-center text-white/60">
-                    <div className="w-14 h-14 rounded-2xl bg-emerald-950 border border-emerald-400/40 text-emerald-300 font-extrabold flex items-center justify-center text-lg shadow-xl mb-2">
-                      ВЫ
-                    </div>
-                    <span className="text-xs font-semibold text-white">Ваш поток</span>
-                  </div>
-                )}
-                <div className="absolute top-2 left-2 px-2 py-0.5 rounded-lg bg-black/60 border border-white/10 text-[10px] font-mono text-indigo-300 flex items-center space-x-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse" />
-                  <span>{userCurrentRole.badge}</span>
-                </div>
-
-                {/* Real-time Voice Audio Visualizer Bars */}
-                <div className="absolute bottom-2 left-2 px-2 py-1 rounded-lg bg-black/70 flex items-center space-x-1">
-                  <Activity className="w-3 h-3 text-emerald-400" />
-                  <div className="flex items-end space-x-0.5 h-3">
-                    <div className="w-1 bg-emerald-400 rounded-xs transition-all duration-75" style={{ height: `${Math.max(2, (audioVolumeLevel * 0.8))}%` }} />
-                    <div className="w-1 bg-emerald-400 rounded-xs transition-all duration-75" style={{ height: `${Math.max(2, audioVolumeLevel)}%` }} />
-                    <div className="w-1 bg-emerald-400 rounded-xs transition-all duration-75" style={{ height: `${Math.max(2, (audioVolumeLevel * 0.6))}%` }} />
-                  </div>
-                </div>
-              </div>
-
-            </div>
-
-            {/* Current Role Card & Switch Action */}
-            <div className="p-4 rounded-3xl bg-white/[0.02] border border-white/10 space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/[0.08] pb-2.5">
-                <div className="flex items-center space-x-2">
-                  <span className="px-2.5 py-0.5 rounded-lg bg-indigo-500/20 text-indigo-300 font-mono text-xs font-semibold">
-                    Ваша текущая роль: {userCurrentRole.title}
-                  </span>
-                </div>
-
-                {/* Role Switcher Button */}
-                <button
-                  type="button"
-                  onClick={handleSwapRoles}
-                  className="px-3.5 py-1.5 rounded-xl bg-white text-slate-950 font-bold text-xs hover:bg-slate-200 transition cursor-pointer flex items-center space-x-1.5 active:scale-95 shadow-md"
-                >
-                  <RefreshCw className="w-3.5 h-3.5 text-slate-950" />
-                  <span>Сменить роли (Раунд {currentRound === 1 ? 2 : 1})</span>
-                </button>
-              </div>
-
-              <p className="text-xs text-white/70 leading-relaxed font-light">
-                {userCurrentRole.description}
-              </p>
-
-              {/* Talking Points */}
-              <div className="space-y-1.5 pt-1">
-                <span className="text-[10px] font-mono uppercase tracking-wider text-white/40 block">
-                  Тезисы и цели вашей роли:
-                </span>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  {userCurrentRole.talkingPoints.map((point, idx) => (
+                  <div className="flex items-center space-x-2">
                     <button
-                      key={idx}
                       type="button"
-                      onClick={() => handleAddUtterance('user', 'Вы', point)}
-                      className="p-2 rounded-xl bg-white/[0.02] hover:bg-white/[0.06] border border-white/[0.06] text-left text-xs text-white/80 hover:text-white transition cursor-pointer flex items-start space-x-1.5 group"
-                      title="Кликните, чтобы озвучить тезис в диалоге"
+                      onClick={handleCopyRoomUrl}
+                      className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-medium flex items-center space-x-1.5 transition cursor-pointer"
+                      title="Скопировать ссылку для напарника"
                     >
-                      <MessageSquare className="w-3 h-3 text-indigo-400 shrink-0 mt-0.5 group-hover:scale-110 transition-transform" />
-                      <span className="leading-snug">{point}</span>
+                      {copiedRoomUrl ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                      <span>{copiedRoomUrl ? 'Скопировано!' : 'Копировать ссылку'}</span>
                     </button>
-                  ))}
+                    <a
+                      href={effectiveRoomUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="px-3 py-1.5 rounded-xl bg-emerald-600/30 hover:bg-emerald-600/50 text-emerald-200 border border-emerald-500/40 text-xs font-medium flex items-center space-x-1.5 transition"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      <span>В отдельной вкладке</span>
+                    </a>
+                  </div>
+                </div>
+
+                {/* Embedded WebRTC Frame */}
+                <div className="flex-1 min-h-[380px] rounded-3xl overflow-hidden border border-white/15 bg-slate-950 relative shadow-2xl flex flex-col">
+                  <iframe
+                    src={effectiveRoomUrl}
+                    allow="camera; microphone; fullscreen; display-capture; autoplay; clipboard-write"
+                    className="w-full flex-1 min-h-[380px] border-0 rounded-3xl"
+                    title="WebRTC Video Conference"
+                  />
                 </div>
               </div>
-            </div>
+            ) : (
+              <>
+                {/* Dual Video Feeds */}
+                <div className="grid grid-cols-2 gap-3 h-52 sm:h-60">
+                  
+                  {/* Partner Video Tile */}
+                  <div className={`relative rounded-2xl overflow-hidden bg-slate-950 border transition-all duration-300 flex flex-col items-center justify-center group shadow-lg ${
+                    isPartnerSpeaking ? 'border-emerald-400 ring-2 ring-emerald-400/50 shadow-emerald-950/50' : 'border-white/10'
+                  }`}>
+                    {partner.avatar ? (
+                      <img src={partner.avatar} alt={partner.name || 'Напарник'} className="w-full h-full object-cover filter brightness-95" />
+                    ) : (
+                      <div className="flex flex-col items-center justify-center text-slate-300">
+                        <div className={`w-14 h-14 rounded-2xl bg-indigo-950 border text-indigo-300 font-extrabold flex items-center justify-center text-lg shadow-xl mb-2 transition-transform ${
+                          isPartnerSpeaking ? 'scale-110 border-emerald-400 text-emerald-300' : 'border-indigo-400/40'
+                        }`}>
+                          {(partner.name || 'Напарник').substring(0, 2).toUpperCase()}
+                        </div>
+                        <span className="text-xs font-semibold text-white">@{partner.name || 'Напарник'}</span>
+                      </div>
+                    )}
+                    
+                    <div className="absolute top-2 left-2 px-2 py-0.5 rounded-lg bg-black/60 border border-white/10 text-[10px] font-mono text-emerald-400 flex items-center space-x-1">
+                      <span className={`w-1.5 h-1.5 rounded-full ${isPartnerSpeaking ? 'bg-emerald-300 animate-ping' : 'bg-emerald-400'}`} />
+                      <span>{partnerCurrentRole.badge}</span>
+                    </div>
+
+                    {/* Partner Voice Mute / Speak Indicator */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsPartnerVoiceMuted((prev) => !prev);
+                        if (!isPartnerVoiceMuted && typeof window !== 'undefined' && 'speechSynthesis' in window) {
+                          try { window.speechSynthesis.cancel(); } catch {}
+                          setIsPartnerSpeaking(false);
+                        }
+                      }}
+                      className={`absolute top-2 right-2 px-2 py-0.5 rounded-lg text-[10px] font-mono flex items-center space-x-1 cursor-pointer transition ${
+                        isPartnerVoiceMuted
+                          ? 'bg-rose-950/80 text-rose-300 border border-rose-500/30'
+                          : isPartnerSpeaking
+                          ? 'bg-emerald-500 text-slate-950 font-bold animate-pulse'
+                          : 'bg-black/60 text-white/70 border border-white/10 hover:text-white'
+                      }`}
+                      title={isPartnerVoiceMuted ? 'Включить голос напарника' : 'Выключить озвучку реплик'}
+                    >
+                      <Volume2 className="w-3 h-3" />
+                      <span>{isPartnerVoiceMuted ? 'Без звука' : isPartnerSpeaking ? 'Говорит...' : 'Голос'}</span>
+                    </button>
+
+                    <div className="absolute bottom-2 right-2 px-2 py-0.5 rounded-lg bg-black/70 text-[10px] font-mono text-white/80">
+                      {partner.role}
+                    </div>
+                  </div>
+
+                  {/* Local User Video Tile */}
+                  <div className="relative rounded-2xl overflow-hidden bg-slate-950 border border-white/10 flex flex-col items-center justify-center shadow-lg">
+                    {isVideoOff ? (
+                      <div className="flex flex-col items-center justify-center text-white/40 text-xs">
+                        <VideoOff className="w-8 h-8 mb-1" />
+                        <span>Камера выключена</span>
+                      </div>
+                    ) : hasCameraPermission ? (
+                      <video ref={localVideoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
+                    ) : (
+                      <div className="flex flex-col items-center justify-center text-white/60">
+                        <div className="w-14 h-14 rounded-2xl bg-emerald-950 border border-emerald-400/40 text-emerald-300 font-extrabold flex items-center justify-center text-lg shadow-xl mb-2">
+                          ВЫ
+                        </div>
+                        <span className="text-xs font-semibold text-white">Ваш поток</span>
+                      </div>
+                    )}
+                    <div className="absolute top-2 left-2 px-2 py-0.5 rounded-lg bg-black/60 border border-white/10 text-[10px] font-mono text-indigo-300 flex items-center space-x-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse" />
+                      <span>{userCurrentRole.badge}</span>
+                    </div>
+
+                    {/* Real-time Voice Audio Visualizer Bars */}
+                    <div className="absolute bottom-2 left-2 px-2 py-1 rounded-lg bg-black/70 flex items-center space-x-1">
+                      <Activity className="w-3 h-3 text-emerald-400" />
+                      <div className="flex items-end space-x-0.5 h-3">
+                        <div className="w-1 bg-emerald-400 rounded-xs transition-all duration-75" style={{ height: `${Math.max(2, (audioVolumeLevel * 0.8))}%` }} />
+                        <div className="w-1 bg-emerald-400 rounded-xs transition-all duration-75" style={{ height: `${Math.max(2, audioVolumeLevel)}%` }} />
+                        <div className="w-1 bg-emerald-400 rounded-xs transition-all duration-75" style={{ height: `${Math.max(2, (audioVolumeLevel * 0.6))}%` }} />
+                      </div>
+                    </div>
+                  </div>
+
+                </div>
+
+                {/* Current Role Card & Switch Action */}
+                <div className="p-4 rounded-3xl bg-white/[0.02] border border-white/10 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/[0.08] pb-2.5">
+                    <div className="flex items-center space-x-2">
+                      <span className="px-2.5 py-0.5 rounded-lg bg-indigo-500/20 text-indigo-300 font-mono text-xs font-semibold">
+                        Ваша текущая роль: {userCurrentRole.title}
+                      </span>
+                    </div>
+
+                    {/* Role Switcher Button */}
+                    <button
+                      type="button"
+                      onClick={handleSwapRoles}
+                      className="px-3.5 py-1.5 rounded-xl bg-white text-slate-950 font-bold text-xs hover:bg-slate-200 transition cursor-pointer flex items-center space-x-1.5 active:scale-95 shadow-md"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5 text-slate-950" />
+                      <span>Сменить роли (Раунд {currentRound === 1 ? 2 : 1})</span>
+                    </button>
+                  </div>
+
+                  <p className="text-xs text-white/70 leading-relaxed font-light">
+                    {userCurrentRole.description}
+                  </p>
+
+                  {/* Talking Points */}
+                  <div className="space-y-1.5 pt-1">
+                    <span className="text-[10px] font-mono uppercase tracking-wider text-white/40 block">
+                      Тезисы и цели вашей роли:
+                    </span>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {userCurrentRole.talkingPoints.map((point, idx) => (
+                        <button
+                          key={idx}
+                          type="button"
+                          onClick={() => handleAddUtterance('user', 'Вы', point)}
+                          className="p-2 rounded-xl bg-white/[0.02] hover:bg-white/[0.06] border border-white/[0.06] text-left text-xs text-white/80 hover:text-white transition cursor-pointer flex items-start space-x-1.5 group"
+                          title="Кликните, чтобы озвучить тезис в диалоге"
+                        >
+                          <MessageSquare className="w-3 h-3 text-indigo-400 shrink-0 mt-0.5 group-hover:scale-110 transition-transform" />
+                          <span className="leading-snug">{point}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
 
           </div>
 

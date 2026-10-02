@@ -2249,6 +2249,7 @@ export const DesktopWorkspace: React.FC<DesktopWorkspaceProps> = ({
                   initialTab="workspace"
                   nodes={nodes}
                   notes={notes}
+                  habits={habits}
                   activeUnitId={activeUnitId}
                   activeUnit={units[activeUnitId] || units['unit-1']}
                   onSelectUnit={onSelectUnit}
@@ -2363,6 +2364,7 @@ export const DesktopWorkspace: React.FC<DesktopWorkspaceProps> = ({
                   currentUser={currentUser}
                   nodes={nodes}
                   notes={notes}
+                  habits={habits}
                   activeUnitId={activeUnitId}
                   onSelectUnit={onSelectUnit}
                   onSaveNote={(title, content, tag) => {

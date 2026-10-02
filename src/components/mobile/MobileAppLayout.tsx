@@ -372,10 +372,10 @@ export const MobileAppLayout: React.FC<MobileAppLayoutProps> = ({
   const handleToggleVoiceInput = () => {
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      setAiMentorChat((prev) => [
+      setMentorMessages((prev) => [
         ...prev,
         {
-          sender: 'ai',
+          role: 'assistant',
           text: 'Голосовой ввод не поддерживается в текущем браузере. Вы можете вводить код или вопросы текстом.',
           time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         },

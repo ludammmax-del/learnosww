@@ -11,7 +11,7 @@ import {
   getDocs, 
   deleteDoc 
 } from 'firebase/firestore';
-import { db } from '../firebase.ts';
+import { db, isFirebaseConfigured } from '../firebase.ts';
 import { PeerPartner, WhiteboardStroke } from '../types.ts';
 import { sanitizeFirestoreData } from '../utils/firestoreSanitizer.ts';
 
@@ -53,9 +53,93 @@ export interface RealPeerSessionData {
   isOpenToLobby?: boolean;
 }
 
-class PeerCollaborationService {
+const LOCAL_STORAGE_PEER_SESSIONS = 'learning_os_peer_sessions';
+
+export class PeerCollaborationService {
+  private localSubscribers: Map<string, Set<(session: RealPeerSessionData | null) => void>> = new Map();
+  private broadcastChannel: BroadcastChannel | null = null;
+
+  constructor() {
+    if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+      try {
+        this.broadcastChannel = new BroadcastChannel('learning_os_peer_channel');
+        this.broadcastChannel.onmessage = (event) => {
+          if (event.data && event.data.type === 'session_update' && event.data.session) {
+            const session = event.data.session as RealPeerSessionData;
+            this.notifyLocalSubscribers(session.id, session);
+          } else if (event.data && event.data.type === 'session_deleted' && event.data.sessionId) {
+            this.notifyLocalSubscribers(event.data.sessionId, null);
+          }
+        };
+      } catch (err) {
+        console.debug('[PeerService] BroadcastChannel init note:', err);
+      }
+    }
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('storage', (e) => {
+        if (e.key === LOCAL_STORAGE_PEER_SESSIONS && e.newValue) {
+          try {
+            const sessions: Record<string, RealPeerSessionData> = JSON.parse(e.newValue);
+            for (const [sId, sData] of Object.entries(sessions)) {
+              this.notifyLocalSubscribers(sId, sData);
+            }
+          } catch {}
+        }
+      });
+    }
+  }
+
+  private hasValidFirestore(): boolean {
+    return Boolean(isFirebaseConfigured && db && (db as any).type);
+  }
+
+  private getLocalSessions(): Record<string, RealPeerSessionData> {
+    try {
+      const raw = localStorage.getItem(LOCAL_STORAGE_PEER_SESSIONS);
+      return raw ? JSON.parse(raw) : {};
+    } catch {
+      return {};
+    }
+  }
+
+  private saveLocalSession(session: RealPeerSessionData) {
+    try {
+      const all = this.getLocalSessions();
+      all[session.id] = session;
+      localStorage.setItem(LOCAL_STORAGE_PEER_SESSIONS, JSON.stringify(all));
+      this.broadcastChannel?.postMessage({ type: 'session_update', session });
+      this.notifyLocalSubscribers(session.id, session);
+    } catch (e) {
+      console.warn('[PeerService] Local session save notice:', e);
+    }
+  }
+
+  private removeLocalSession(sessionId: string) {
+    try {
+      const all = this.getLocalSessions();
+      delete all[sessionId];
+      localStorage.setItem(LOCAL_STORAGE_PEER_SESSIONS, JSON.stringify(all));
+      this.broadcastChannel?.postMessage({ type: 'session_deleted', sessionId });
+      this.notifyLocalSubscribers(sessionId, null);
+    } catch {}
+  }
+
+  private notifyLocalSubscribers(sessionId: string, session: RealPeerSessionData | null) {
+    const subs = this.localSubscribers.get(sessionId);
+    if (subs) {
+      subs.forEach((cb) => {
+        try {
+          cb(session);
+        } catch (err) {
+          console.error('[PeerService] Subscriber callback error:', err);
+        }
+      });
+    }
+  }
+
   /**
-   * Create a new real collaborative room in Firestore
+   * Create a new collaborative room in Firestore with local fallback
    */
   public async createSession(
     user: { id: string; name: string; avatar?: string },
@@ -63,31 +147,7 @@ class PeerCollaborationService {
     customCode?: string
   ): Promise<RealPeerSessionData> {
     const sessionCode = customCode ? customCode.trim().toUpperCase() : `OS-${Math.floor(1000 + Math.random() * 9000)}`;
-    const sessionRef = doc(db, 'peer_sessions', sessionCode);
-
-    // If custom code is provided, check if room already exists to prevent destructive overwriting
-    if (customCode) {
-      try {
-        const existingSnap = await getDoc(sessionRef);
-        if (existingSnap.exists()) {
-          const existingData = existingSnap.data() as RealPeerSessionData;
-          // If the caller is already userA or userB, return existing session intact
-          if (existingData.userA?.id === user.id || existingData.userB?.id === user.id) {
-            return existingData;
-          }
-          // If room is open for userB, join it cleanly
-          if (!existingData.userB) {
-            const joined = await this.joinSession(sessionCode, user);
-            if (joined) return joined;
-          }
-        }
-      } catch (err) {
-        console.debug('Session existence check notice:', err);
-      }
-    }
-
     const roomName = `peer-${sessionCode.toLowerCase()}`;
-    // Use instant Jitsi WebRTC room (never fails with "meeting does not exist" like expired Daily.co rooms)
     const dailyRoomUrl = `https://meet.jit.si/learning-os-${roomName}#config.prejoinPageEnabled=false`;
 
     const userAData: any = {
@@ -107,14 +167,14 @@ class PeerCollaborationService {
       userB: null,
       activeUnitId: unitId,
       dailyRoomUrl,
-      sharedCode: `// Реальная совместная сессия P2P: ${sessionCode}\n// Изменения кода синхронизируются в реальном времени через Firestore!\n\nexport function solveCollaborativeTask() {\n  console.log("Напарник подключен к комнате ${sessionCode}");\n  return true;\n}`,
+      sharedCode: `// Реальная совместная сессия P2P: ${sessionCode}\n// Изменения кода синхронизируются в реальном времени!\n\nexport function solveCollaborativeTask() {\n  console.log("Напарник подключен к комнате ${sessionCode}");\n  return true;\n}`,
       whiteboardStrokes: [],
       messages: [
         {
           id: `msg-${Date.now()}`,
           senderId: 'system',
           senderName: 'Система',
-          text: `Комната ${sessionCode} создана в облаке Firestore. Поделитесь кодом комнаты или ссылкой со вторым студентом!`,
+          text: `Комната ${sessionCode} создана. Поделитесь кодом комнаты или ссылкой со вторым студентом!`,
           time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         },
       ],
@@ -123,26 +183,57 @@ class PeerCollaborationService {
       isOpenToLobby: true,
     };
 
-    await setDoc(sessionRef, sanitizeFirestoreData(sessionData));
+    // Save locally first
+    this.saveLocalSession(sessionData);
+
+    if (this.hasValidFirestore()) {
+      try {
+        const sessionRef = doc(db, 'peer_sessions', sessionCode);
+        if (customCode) {
+          const snap = await getDoc(sessionRef);
+          if (snap.exists()) {
+            const existing = snap.data() as RealPeerSessionData;
+            if (existing.userA?.id === user.id || existing.userB?.id === user.id) {
+              return existing;
+            }
+          }
+        }
+        await setDoc(sessionRef, sanitizeFirestoreData(sessionData));
+      } catch (err) {
+        console.warn('[PeerService] Firestore sync error, running locally:', err);
+      }
+    }
+
     return sessionData;
   }
 
   /**
-   * Join an existing real session in Firestore by room code
+   * Join an existing real session by room code
    */
   public async joinSession(
     sessionCode: string,
     user: { id: string; name: string; avatar?: string }
   ): Promise<RealPeerSessionData | null> {
     const cleanCode = sessionCode.trim().toUpperCase();
-    const sessionRef = doc(db, 'peer_sessions', cleanCode);
-    const snap = await getDoc(sessionRef);
 
-    if (!snap.exists()) {
-      return null;
+    // Check local store first
+    let data: RealPeerSessionData | null = this.getLocalSessions()[cleanCode] || null;
+
+    if (this.hasValidFirestore()) {
+      try {
+        const sessionRef = doc(db, 'peer_sessions', cleanCode);
+        const snap = await getDoc(sessionRef);
+        if (snap.exists()) {
+          data = snap.data() as RealPeerSessionData;
+        }
+      } catch (err) {
+        console.warn('[PeerService] Firestore joinSession fetch failed:', err);
+      }
     }
 
-    const data = snap.data() as RealPeerSessionData;
+    if (!data) {
+      return null;
+    }
 
     // If joining as User B (or re-joining)
     if (data.userA.id !== user.id) {
@@ -170,53 +261,74 @@ class PeerCollaborationService {
         time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       });
 
-      await setDoc(sessionRef, sanitizeFirestoreData(data), { merge: true });
+      this.saveLocalSession(data);
+
+      if (this.hasValidFirestore()) {
+        try {
+          const sessionRef = doc(db, 'peer_sessions', cleanCode);
+          await setDoc(sessionRef, sanitizeFirestoreData(data), { merge: true });
+        } catch (err) {
+          console.warn('[PeerService] Firestore join update notice:', err);
+        }
+      }
     }
 
     return data;
   }
 
   /**
-   * Matchmaking: Find any open session in Firestore lobby or create one
+   * Matchmaking: Find any open session in lobby or create one
    */
   public async findOrCreateLobbyMatch(
     user: { id: string; name: string; avatar?: string },
     unitId: string = 'unit-1'
   ): Promise<{ session: RealPeerSessionData; isNew: boolean }> {
-    try {
-      const peerCol = collection(db, 'peer_sessions');
-      const q = query(peerCol, where('isOpenToLobby', '==', true));
-      const snap = await getDocs(q);
+    // 1. Try Firestore lobby
+    if (this.hasValidFirestore()) {
+      try {
+        const peerCol = collection(db, 'peer_sessions');
+        const q = query(peerCol, where('isOpenToLobby', '==', true));
+        const snap = await getDocs(q);
 
-      // Find first open session where userA is not current user
-      for (const docSnap of snap.docs) {
-        const s = docSnap.data() as RealPeerSessionData;
-        if (s.userA && s.userA.id !== user.id && (!s.userB || s.userB.id === user.id)) {
-          // Join this real open session!
-          const joined = await this.joinSession(s.id, user);
-          if (joined) {
-            return { session: joined, isNew: false };
+        for (const docSnap of snap.docs) {
+          const s = docSnap.data() as RealPeerSessionData;
+          if (s.userA && s.userA.id !== user.id && (!s.userB || s.userB.id === user.id)) {
+            const joined = await this.joinSession(s.id, user);
+            if (joined) {
+              return { session: joined, isNew: false };
+            }
           }
         }
+      } catch (err) {
+        console.warn('Lobby matchmaking query failed, checking local:', err);
       }
-    } catch (err) {
-      console.warn('Lobby matchmaking query failed, creating new room:', err);
     }
 
-    // No open session found, create a new one waiting for partner
+    // 2. Check local sessions open to lobby
+    const local = this.getLocalSessions();
+    for (const [id, s] of Object.entries(local)) {
+      if (s.isOpenToLobby && s.userA && s.userA.id !== user.id && (!s.userB || s.userB.id === user.id)) {
+        const joined = await this.joinSession(id, user);
+        if (joined) {
+          return { session: joined, isNew: false };
+        }
+      }
+    }
+
+    // 3. No open session found, create a new one waiting for partner
     const newSession = await this.createSession(user, unitId);
     return { session: newSession, isNew: true };
   }
 
   /**
-   * Send live message to session in Firestore
+   * Send live message to session
    */
   public async sendMessage(
     sessionId: string,
     message: { senderId: string; senderName: string; text: string }
   ) {
     if (!sessionId || !message.text.trim()) return;
-    const sessionRef = doc(db, 'peer_sessions', sessionId);
+
     const newMsg = {
       id: `msg-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       senderId: message.senderId,
@@ -225,13 +337,24 @@ class PeerCollaborationService {
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     };
 
-    try {
-      await updateDoc(sessionRef, {
-        messages: arrayUnion(newMsg),
-        updatedAt: Date.now(),
-      });
-    } catch (err) {
-      console.warn('Failed to send real-time peer message:', err);
+    const localSessions = this.getLocalSessions();
+    const curr = localSessions[sessionId];
+    if (curr) {
+      curr.messages = [...(curr.messages || []), newMsg];
+      curr.updatedAt = Date.now();
+      this.saveLocalSession(curr);
+    }
+
+    if (this.hasValidFirestore()) {
+      try {
+        const sessionRef = doc(db, 'peer_sessions', sessionId);
+        await updateDoc(sessionRef, {
+          messages: arrayUnion(newMsg),
+          updatedAt: Date.now(),
+        });
+      } catch (err) {
+        console.warn('Failed to send real-time peer message to Firestore:', err);
+      }
     }
   }
 
@@ -240,15 +363,27 @@ class PeerCollaborationService {
    */
   public async updateCode(sessionId: string, code: string, senderId: string) {
     if (!sessionId) return;
-    const sessionRef = doc(db, 'peer_sessions', sessionId);
-    try {
-      await updateDoc(sessionRef, {
-        sharedCode: code,
-        lastCodeEditorId: senderId,
-        updatedAt: Date.now(),
-      });
-    } catch (err) {
-      console.warn('Failed to update shared code:', err);
+
+    const localSessions = this.getLocalSessions();
+    const curr = localSessions[sessionId];
+    if (curr) {
+      curr.sharedCode = code;
+      curr.lastCodeEditorId = senderId;
+      curr.updatedAt = Date.now();
+      this.saveLocalSession(curr);
+    }
+
+    if (this.hasValidFirestore()) {
+      try {
+        const sessionRef = doc(db, 'peer_sessions', sessionId);
+        await updateDoc(sessionRef, {
+          sharedCode: code,
+          lastCodeEditorId: senderId,
+          updatedAt: Date.now(),
+        });
+      } catch (err) {
+        console.warn('Failed to update shared code in Firestore:', err);
+      }
     }
   }
 
@@ -257,14 +392,25 @@ class PeerCollaborationService {
    */
   public async updateWhiteboard(sessionId: string, strokes: WhiteboardStroke[]) {
     if (!sessionId) return;
-    const sessionRef = doc(db, 'peer_sessions', sessionId);
-    try {
-      await updateDoc(sessionRef, {
-        whiteboardStrokes: strokes,
-        updatedAt: Date.now(),
-      });
-    } catch (err) {
-      console.warn('Failed to update whiteboard strokes:', err);
+
+    const localSessions = this.getLocalSessions();
+    const curr = localSessions[sessionId];
+    if (curr) {
+      curr.whiteboardStrokes = strokes;
+      curr.updatedAt = Date.now();
+      this.saveLocalSession(curr);
+    }
+
+    if (this.hasValidFirestore()) {
+      try {
+        const sessionRef = doc(db, 'peer_sessions', sessionId);
+        await updateDoc(sessionRef, {
+          whiteboardStrokes: strokes,
+          updatedAt: Date.now(),
+        });
+      } catch (err) {
+        console.warn('Failed to update whiteboard strokes in Firestore:', err);
+      }
     }
   }
 
@@ -273,14 +419,25 @@ class PeerCollaborationService {
    */
   public async addWhiteboardStroke(sessionId: string, stroke: WhiteboardStroke) {
     if (!sessionId) return;
-    const sessionRef = doc(db, 'peer_sessions', sessionId);
-    try {
-      await updateDoc(sessionRef, {
-        whiteboardStrokes: arrayUnion(stroke),
-        updatedAt: Date.now(),
-      });
-    } catch (err) {
-      console.warn('Failed to add whiteboard stroke:', err);
+
+    const localSessions = this.getLocalSessions();
+    const curr = localSessions[sessionId];
+    if (curr) {
+      curr.whiteboardStrokes = [...(curr.whiteboardStrokes || []), stroke];
+      curr.updatedAt = Date.now();
+      this.saveLocalSession(curr);
+    }
+
+    if (this.hasValidFirestore()) {
+      try {
+        const sessionRef = doc(db, 'peer_sessions', sessionId);
+        await updateDoc(sessionRef, {
+          whiteboardStrokes: arrayUnion(stroke),
+          updatedAt: Date.now(),
+        });
+      } catch (err) {
+        console.warn('Failed to add whiteboard stroke in Firestore:', err);
+      }
     }
   }
 
@@ -289,14 +446,25 @@ class PeerCollaborationService {
    */
   public async updateActiveUnit(sessionId: string, unitId: string) {
     if (!sessionId || !unitId) return;
-    const sessionRef = doc(db, 'peer_sessions', sessionId);
-    try {
-      await updateDoc(sessionRef, {
-        activeUnitId: unitId,
-        updatedAt: Date.now(),
-      });
-    } catch (err) {
-      console.warn('Failed to update active unit in session:', err);
+
+    const localSessions = this.getLocalSessions();
+    const curr = localSessions[sessionId];
+    if (curr) {
+      curr.activeUnitId = unitId;
+      curr.updatedAt = Date.now();
+      this.saveLocalSession(curr);
+    }
+
+    if (this.hasValidFirestore()) {
+      try {
+        const sessionRef = doc(db, 'peer_sessions', sessionId);
+        await updateDoc(sessionRef, {
+          activeUnitId: unitId,
+          updatedAt: Date.now(),
+        });
+      } catch (err) {
+        console.warn('Failed to update active unit in Firestore:', err);
+      }
     }
   }
 
@@ -305,32 +473,43 @@ class PeerCollaborationService {
    */
   public async swapRoles(sessionId: string, targetRole?: 'Driver' | 'Navigator') {
     if (!sessionId) return;
-    const sessionRef = doc(db, 'peer_sessions', sessionId);
-    try {
-      const snap = await getDoc(sessionRef);
-      if (!snap.exists()) return;
-      const data = snap.data() as RealPeerSessionData;
 
+    const localSessions = this.getLocalSessions();
+    const curr = localSessions[sessionId];
+    if (curr) {
       if (targetRole) {
-        if (data.userA) data.userA.role = targetRole;
-        if (data.userB) data.userB.role = targetRole === 'Driver' ? 'Navigator' : 'Driver';
+        if (curr.userA) curr.userA.role = targetRole;
+        if (curr.userB) curr.userB.role = targetRole === 'Driver' ? 'Navigator' : 'Driver';
       } else {
-        if (data.userA && data.userB) {
-          const tempRole = data.userA.role;
-          data.userA.role = data.userB.role;
-          data.userB.role = tempRole;
-        } else if (data.userA) {
-          data.userA.role = data.userA.role === 'Driver' ? 'Navigator' : 'Driver';
+        if (curr.userA && curr.userB) {
+          const tempRole = curr.userA.role;
+          curr.userA.role = curr.userB.role;
+          curr.userB.role = tempRole;
+        } else if (curr.userA) {
+          curr.userA.role = curr.userA.role === 'Driver' ? 'Navigator' : 'Driver';
         }
       }
+      curr.updatedAt = Date.now();
+      this.saveLocalSession(curr);
+    }
 
-      await updateDoc(sessionRef, {
-        'userA.role': data.userA?.role || 'Driver',
-        'userB.role': data.userB ? data.userB.role : 'Navigator',
-        updatedAt: Date.now(),
-      });
-    } catch (err) {
-      console.warn('Failed to swap peer roles:', err);
+    if (this.hasValidFirestore()) {
+      try {
+        const sessionRef = doc(db, 'peer_sessions', sessionId);
+        const snap = await getDoc(sessionRef);
+        if (snap.exists()) {
+          const data = snap.data() as RealPeerSessionData;
+          const userARole = targetRole || (data.userA?.role === 'Driver' ? 'Navigator' : 'Driver');
+          const userBRole = data.userB ? (userARole === 'Driver' ? 'Navigator' : 'Driver') : 'Navigator';
+          await updateDoc(sessionRef, {
+            'userA.role': userARole,
+            'userB.role': userBRole,
+            updatedAt: Date.now(),
+          });
+        }
+      } catch (err) {
+        console.warn('Failed to swap peer roles in Firestore:', err);
+      }
     }
   }
 
@@ -344,52 +523,101 @@ class PeerCollaborationService {
     isReady: boolean
   ) {
     if (!sessionId) return;
-    const sessionRef = doc(db, 'peer_sessions', sessionId);
-    try {
-      const snap = await getDoc(sessionRef);
-      const existingData = snap.exists() ? (snap.data() as RealPeerSessionData) : null;
-      const isOptionChanged = existingData && existingData.consensusTestOption !== optionId;
 
-      const payload: any = {
-        consensusTestOption: optionId ?? null,
-        [userReadyKey]: isReady,
-        updatedAt: Date.now(),
-      };
-
-      // If option changed, reset other user's ready flag to ensure real 2-person consensus
+    const localSessions = this.getLocalSessions();
+    const curr = localSessions[sessionId];
+    if (curr) {
+      const isOptionChanged = curr.consensusTestOption !== optionId;
+      curr.consensusTestOption = optionId;
+      curr[userReadyKey] = isReady;
       if (isOptionChanged) {
         const otherKey = userReadyKey === 'userAReady' ? 'userBReady' : 'userAReady';
-        payload[otherKey] = false;
+        curr[otherKey] = false;
       }
+      curr.updatedAt = Date.now();
+      this.saveLocalSession(curr);
+    }
 
-      await updateDoc(sessionRef, sanitizeFirestoreData(payload));
-    } catch (err) {
-      console.warn('Failed to update consensus:', err);
+    if (this.hasValidFirestore()) {
+      try {
+        const sessionRef = doc(db, 'peer_sessions', sessionId);
+        const snap = await getDoc(sessionRef);
+        const existingData = snap.exists() ? (snap.data() as RealPeerSessionData) : null;
+
+        const isOptionChanged = existingData && existingData.consensusTestOption !== optionId;
+        const payload: any = {
+          consensusTestOption: optionId,
+          [userReadyKey]: isReady,
+          updatedAt: Date.now(),
+        };
+
+        if (isOptionChanged) {
+          const otherKey = userReadyKey === 'userAReady' ? 'userBReady' : 'userAReady';
+          payload[otherKey] = false;
+        }
+
+        await updateDoc(sessionRef, sanitizeFirestoreData(payload));
+      } catch (err) {
+        console.warn('Failed to update consensus in Firestore:', err);
+      }
     }
   }
 
   /**
-   * Subscribe to live updates of the session
+   * Subscribe to live updates of the session (Local + Cloud)
    */
   public subscribeToSession(
     sessionId: string,
     onUpdate: (session: RealPeerSessionData | null) => void
-  ) {
+  ): () => void {
     if (!sessionId) return () => {};
-    const sessionRef = doc(db, 'peer_sessions', sessionId);
-    return onSnapshot(
-      sessionRef,
-      (snap) => {
-        if (snap.exists()) {
-          onUpdate(snap.data() as RealPeerSessionData);
-        } else {
-          onUpdate(null);
-        }
-      },
-      (err) => {
-        console.warn('Peer session snapshot listener error:', err);
+
+    // Register local subscriber
+    if (!this.localSubscribers.has(sessionId)) {
+      this.localSubscribers.set(sessionId, new Set());
+    }
+    const subs = this.localSubscribers.get(sessionId)!;
+    subs.add(onUpdate);
+
+    // Initial state from local storage
+    const initialLocal = this.getLocalSessions()[sessionId] || null;
+    if (initialLocal) {
+      onUpdate(initialLocal);
+    }
+
+    let unsubFirestore: (() => void) | null = null;
+    if (this.hasValidFirestore()) {
+      try {
+        const sessionRef = doc(db, 'peer_sessions', sessionId);
+        unsubFirestore = onSnapshot(
+          sessionRef,
+          (snap) => {
+            if (snap.exists()) {
+              const data = snap.data() as RealPeerSessionData;
+              this.saveLocalSession(data);
+              onUpdate(data);
+            } else {
+              onUpdate(null);
+            }
+          },
+          (err) => {
+            console.warn('Peer session snapshot listener notice:', err);
+          }
+        );
+      } catch (err) {
+        console.warn('Firestore subscription unavailable:', err);
       }
-    );
+    }
+
+    return () => {
+      subs.delete(onUpdate);
+      if (subs.size === 0) {
+        this.localSubscribers.delete(sessionId);
+      }
+      if (unsubFirestore) {
+        unsubFirestore();
+      }
+    };
   }
 
   /**
@@ -397,34 +625,56 @@ class PeerCollaborationService {
    */
   public async leaveSession(sessionId: string, userId: string) {
     if (!sessionId) return;
-    try {
-      const sessionRef = doc(db, 'peer_sessions', sessionId);
-      const snap = await getDoc(sessionRef);
-      if (!snap.exists()) return;
-      const data = snap.data() as RealPeerSessionData;
 
-      if (data.userB && data.userB.id === userId) {
-        await updateDoc(sessionRef, {
-          userB: null,
-          isOpenToLobby: true,
-          updatedAt: Date.now(),
-        });
-      } else if (data.userA && data.userA.id === userId) {
-        if (data.userB) {
-          // Promote User B to User A
+    const localSessions = this.getLocalSessions();
+    const curr = localSessions[sessionId];
+    if (curr) {
+      if (curr.userB && curr.userB.id === userId) {
+        curr.userB = null;
+        curr.isOpenToLobby = true;
+        curr.updatedAt = Date.now();
+        this.saveLocalSession(curr);
+      } else if (curr.userA && curr.userA.id === userId) {
+        if (curr.userB) {
+          curr.userA = curr.userB;
+          curr.userB = null;
+          curr.isOpenToLobby = true;
+          curr.updatedAt = Date.now();
+          this.saveLocalSession(curr);
+        } else {
+          this.removeLocalSession(sessionId);
+        }
+      }
+    }
+
+    if (this.hasValidFirestore()) {
+      try {
+        const sessionRef = doc(db, 'peer_sessions', sessionId);
+        const snap = await getDoc(sessionRef);
+        if (!snap.exists()) return;
+        const data = snap.data() as RealPeerSessionData;
+
+        if (data.userB && data.userB.id === userId) {
           await updateDoc(sessionRef, {
-            userA: data.userB,
             userB: null,
             isOpenToLobby: true,
             updatedAt: Date.now(),
           });
-        } else {
-          // Empty session, delete
-          await deleteDoc(sessionRef);
+        } else if (data.userA && data.userA.id === userId) {
+          if (data.userB) {
+            await updateDoc(sessionRef, {
+              userA: data.userB,
+              userB: null,
+              isOpenToLobby: true,
+              updatedAt: Date.now(),
+            });
+          } else {
+            await deleteDoc(sessionRef);
+          }
         }
+      } catch (err) {
+        console.warn('Failed to leave peer session in Firestore:', err);
       }
-    } catch (err) {
-      console.warn('Failed to leave peer session:', err);
     }
   }
 }

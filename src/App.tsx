@@ -1527,6 +1527,8 @@ function LearningOSApp() {
                 onSyncWithMainPlayer={() => setActiveTab('focus')}
                 initialTab={peerInitialTab}
                 nodes={nodes}
+                notes={notes}
+                habits={habits}
                 activeUnitId={activeUnitId}
                 activeUnit={units[activeUnitId] || units['unit-1']}
                 onSelectUnit={(unitId) => {
@@ -1732,6 +1734,7 @@ function LearningOSApp() {
                 onOpenPeerWindow={() => handleSelectTab('peer')}
                 onStartCallWithPartner={(p) => handleStartCall({ name: p.name, avatar: p.avatar, role: p.skillDomain || 'P2P' })}
                 currentUser={currentUser}
+                habits={habits}
                 skillDomain={localStorage.getItem('learning_os_target_domain') || 'Иностранные языки'}
                 targetGoal="Свободная речь и практика спарринга"
                 onClose={() => handleSelectTab('desktop')}

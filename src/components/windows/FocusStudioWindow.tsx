@@ -592,6 +592,63 @@ export const FocusStudioWindow: React.FC<FocusStudioWindowProps> = ({
     }
   };
 
+  const handleDeepenBlockKnowledge = async (forceRefresh = false) => {
+    setIsLoadingGroundedBlock(true);
+    playChime('click');
+
+    try {
+      const res = await fetch('/api/gemini/grounded-adapted-block', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          unitId: currentUnit.id,
+          unitTitle: currentUnit.title,
+          category: currentUnit.category,
+          blockIndex,
+          userLevel: activeUserLevel,
+          thinkingStyle: activeThinkingStyle,
+          targetRole: savedSurvey?.targetRole || 'Специалист-практик',
+          targetGoal: savedSurvey?.targetGoal || 'Глубокое понимание сути без зубрежки',
+          whyGoal: savedSurvey?.whyGoal || savedSurvey?.userPurpose || localStorage.getItem('learning_os_user_purpose') || '',
+          userPurpose: savedSurvey?.userPurpose || savedSurvey?.whyGoal || localStorage.getItem('learning_os_user_purpose') || '',
+          baggageAndBottlenecks: savedSurvey?.baggageAndBottlenecks || '',
+          existingTheory: currentUnit.summaryMarkdown,
+          forceRefresh,
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.adaptedTheoryMarkdown) {
+          const enriched: LearningUnit = {
+            ...currentUnit,
+            summaryMarkdown: data.adaptedTheoryMarkdown,
+            groundingSources: data.groundingSources || currentUnit.groundingSources,
+            glossaryTerms: data.glossaryTerms || currentUnit.glossaryTerms,
+            practicalExercises: data.practicalExercises || currentUnit.practicalExercises,
+            quiz: data.quiz && data.quiz.length > 0 ? data.quiz : currentUnit.quiz,
+            projectTask: data.miniRealProject || currentUnit.projectTask,
+            capstone10Project: data.capstone10Project || currentUnit.capstone10Project,
+            is10BlockMilestone: data.is10BlockMilestone,
+            isEnriched: true,
+          };
+          setCurrentUnit(enriched);
+          if (enriched.projectTask?.starterCode) {
+            setCodeContent(enriched.projectTask.starterCode);
+            setFileName(enriched.projectTask.defaultFilename);
+          }
+          if (onUpdateUnit) onUpdateUnit(enriched);
+          setAdaptationSuccessNote('ИИ синтезировал исчерпывающий блок знаний: 7 разделов с разбором под капотом, инвариантами и граничными случаями.');
+          playChime('success');
+        }
+      }
+    } catch (err) {
+      console.warn('[FocusStudio] Deepen knowledge error:', err);
+    } finally {
+      setIsLoadingGroundedBlock(false);
+    }
+  };
+
   // Video State
   const [isPlaying, setIsPlaying] = useState(false);
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
@@ -708,8 +765,15 @@ export const FocusStudioWindow: React.FC<FocusStudioWindowProps> = ({
     setFileRawData(null);
     setLocalExecutionOutput(null);
 
-    // Auto-enrich unit via Grounded Gemini AI only if explicitly not enriched and lacks structured theory/exercises
-    const needsEnrichment = !currentUnit.isEnriched && (!currentUnit.summaryMarkdown || currentUnit.summaryMarkdown.length < 50 || currentUnit.summaryMarkdown.includes('Четкое разделение ответственности'));
+    // Auto-enrich unit via Grounded Gemini AI to guarantee deep knowledge (under the hood, invariants, code, edge cases)
+    const isTheoryDeep = Boolean(
+      currentUnit.summaryMarkdown &&
+      currentUnit.summaryMarkdown.length >= 1000 &&
+      currentUnit.summaryMarkdown.includes('####') &&
+      !currentUnit.summaryMarkdown.includes('Четкое разделение ответственности') &&
+      !currentUnit.summaryMarkdown.includes('Любая задача в рамках темы подчиняется фундаментальному закону: понимание сути')
+    );
+    const needsEnrichment = !currentUnit.isEnriched || !isTheoryDeep;
     if (needsEnrichment) {
       let isCancelled = false;
       setIsLoadingGroundedBlock(true);
@@ -1339,20 +1403,30 @@ export const FocusStudioWindow: React.FC<FocusStudioWindowProps> = ({
 
         {/* Desktop PC Dual-Pane Productivity Toggle & Cadence */}
         <div className="flex items-center space-x-2">
-          <button
-            type="button"
-            id="btn-toggle-dual-pane"
-            onClick={handleToggleDualPanePc}
-            className={`hidden md:flex items-center space-x-1.5 px-2.5 py-1 rounded-md border text-xs font-medium transition cursor-pointer ${
-              isDualPanePcMode
-                ? 'bg-indigo-50 border-indigo-200 text-indigo-700'
-                : 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-600'
-            }`}
-            title="Режим двух колонок: слева конспект и первоисточники, справа активная практика или тест"
-          >
-            <Columns className="w-3.5 h-3.5 text-indigo-500" />
-            <span>{isDualPanePcMode ? '2 Колонки ПК' : '1 Колонка'}</span>
-          </button>
+          {chainStep === 3 ? (
+            <div 
+              className="hidden md:flex items-center space-x-1.5 px-2.5 py-1 rounded-md border border-rose-200 bg-rose-50/90 text-rose-700 text-xs font-medium select-none"
+              title="В режиме слепого теста («Чистый лист») первоисточники и конспект скрыты для чистоты воспроизведения по памяти"
+            >
+              <EyeOff className="w-3.5 h-3.5 text-rose-500" />
+              <span>Слепой тест (шпаргалки скрыты)</span>
+            </div>
+          ) : (
+            <button
+              type="button"
+              id="btn-toggle-dual-pane"
+              onClick={handleToggleDualPanePc}
+              className={`hidden md:flex items-center space-x-1.5 px-2.5 py-1 rounded-md border text-xs font-medium transition cursor-pointer ${
+                isDualPanePcMode
+                  ? 'bg-indigo-50 border-indigo-200 text-indigo-700'
+                  : 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-600'
+              }`}
+              title="Режим двух колонок: слева конспект и первоисточники, справа активная практика или тест"
+            >
+              <Columns className="w-3.5 h-3.5 text-indigo-500" />
+              <span>{isDualPanePcMode ? '2 Колонки ПК' : '1 Колонка'}</span>
+            </button>
+          )}
 
           {/* Project Cadence Status Indicator ("часто но не слишком") */}
           {cadenceSettings && (
@@ -1605,12 +1679,21 @@ export const FocusStudioWindow: React.FC<FocusStudioWindowProps> = ({
               <div className="flex flex-wrap items-center justify-between border-b border-slate-100 pb-3 gap-2">
                 <div className="flex items-center space-x-2">
                   <BookOpen className="w-4 h-4 text-sky-600" />
-                  <h3 className="text-sm font-bold text-slate-900">
-                    Конспект первоисточников: {currentUnit.title}
-                  </h3>
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900 leading-tight">
+                      Конспект первоисточников: {currentUnit.title}
+                    </h3>
+                    <div className="flex items-center space-x-2 text-[11px] text-slate-500 mt-0.5">
+                      <span className="font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200/60">
+                        ✓ 7 фундаментальных разделов
+                      </span>
+                      <span>·</span>
+                      <span>Разбор под капотом · Инварианты · Код & Граничные случаи</span>
+                    </div>
+                  </div>
                 </div>
 
-                <div className="flex items-center space-x-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <button
                     id="btn-ai-embed-diagram"
                     type="button"
@@ -1639,6 +1722,17 @@ export const FocusStudioWindow: React.FC<FocusStudioWindowProps> = ({
                   </button>
                 </div>
               </div>
+
+              {/* Loading Banner when synthesizing deep knowledge */}
+              {isLoadingGroundedBlock && (
+                <div className="p-4 rounded-xl bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200 text-amber-950 flex items-center space-x-3 animate-pulse">
+                  <div className="w-5 h-5 border-2 border-amber-600 border-t-transparent rounded-full animate-spin shrink-0" />
+                  <div className="text-xs space-y-0.5">
+                    <span className="font-bold">ИИ синтезирует глубокий блок знаний («{currentUnit.title}»)...</span>
+                    <p className="text-amber-800/80">Глубинный разбор механизмов под капотом, архитектурные инварианты, блок-схема, боевой кейс и матрица компромиссов.</p>
+                  </div>
+                </div>
+              )}
 
               {/* AI Adaptation Feedback Banner */}
               {adaptationSuccessNote && (
@@ -1696,18 +1790,18 @@ export const FocusStudioWindow: React.FC<FocusStudioWindowProps> = ({
           </div>
         )}
 
-        {/* STEPS 2, 3, 4, 5 (Dual-Pane on PC or Centered Single-Column) */}
+        {/* STEPS 2, 3, 4, 5 (Dual-Pane on PC or Centered Single-Column; Step 3 Blind Test is strictly Single-Column without theory/sources) */}
         {chainStep > 1 && (
-          <div className={isDualPanePcMode ? "grid grid-cols-1 xl:grid-cols-12 gap-6 items-start max-w-[2400px] mx-auto animate-fade-in" : "max-w-4xl mx-auto space-y-6 animate-fade-in"}>
-            {/* Left Reference Column on PC (Theory & Sources) */}
-            {isDualPanePcMode && (
+          <div className={isDualPanePcMode && chainStep !== 3 ? "grid grid-cols-1 xl:grid-cols-12 gap-6 items-start max-w-[2400px] mx-auto animate-fade-in" : "max-w-4xl mx-auto space-y-6 animate-fade-in"}>
+            {/* Left Reference Column on PC (Theory & Sources) - strictly hidden during Step 3 (Слепой тест) */}
+            {isDualPanePcMode && chainStep !== 3 && (
               <div className="xl:col-span-5 space-y-4 xl:sticky xl:top-0 xl:max-h-[calc(100vh-130px)] xl:overflow-y-auto pr-1">
                 {renderTheorySidePane()}
               </div>
             )}
 
             {/* Right Active Step Column */}
-            <div className={isDualPanePcMode ? "xl:col-span-7 space-y-6 w-full" : "space-y-6 w-full"}>
+            <div className={isDualPanePcMode && chainStep !== 3 ? "xl:col-span-7 space-y-6 w-full" : "space-y-6 w-full"}>
               {/* STEP 2: EXPRESS QUIZ & AI REVIEW */}
               {chainStep === 2 && (
           <div className="max-w-3xl mx-auto space-y-6 animate-fade-in">

@@ -659,9 +659,9 @@ apiRouter.post('/gemini/grounded-adapted-block', async (req, res) => {
     const unitTitle = params.unitTitle || params.title || 'Учебный модуль';
     const category = params.category || 'Общая дисциплина';
     
-    // 1. Check Firestore Knowledge Cache first
+    // 1. Check Firestore Knowledge Cache first (only accept if rich and detailed >= 1000 chars, unless forceRefresh requested)
     const cached = await FirestoreKnowledgeCache.getCachedLesson(unitTitle, category);
-    if (cached && cached.adaptedTheoryMarkdown && Array.isArray(cached.practicalExercises)) {
+    if (!params.forceRefresh && cached && cached.adaptedTheoryMarkdown && cached.adaptedTheoryMarkdown.length >= 1000 && Array.isArray(cached.practicalExercises)) {
       console.log(`[API Route] HIT! Returning Firestore-cached adapted block for: "${unitTitle}"`);
       return res.json({
         ...cached,
@@ -2335,7 +2335,7 @@ apiRouter.get('/community/rooms/:id', async (req, res) => {
     const authenticatedUserId = await getAuthenticatedUserId(req);
     const safeRoom = authenticatedUserId && authenticatedUserId === room.creatorId
       ? room
-      : { ...room, accessCode: undefined, members: undefined };
+      : { ...room, accessCode: undefined };
     return res.json({ success: true, room: safeRoom });
   } catch (err: any) {
     return res.status(500).json({ error: err?.message || 'Error fetching room' });
@@ -2499,13 +2499,18 @@ apiRouter.post('/community/rooms/:id/posts', async (req, res) => {
     }
 
     const newPost = {
-      id: `post-${Date.now()}`,
+      id: req.body?.id || `post-${Date.now()}`,
       authorId,
       authorName,
       authorAvatar,
       text: text.trim(),
-      createdAt: 'Только что',
+      createdAt: req.body?.createdAt || new Date().toISOString(),
       likes: 0,
+      learningNode: req.body?.learningNode,
+      attachedNotes: req.body?.attachedNotes,
+      attachedHabits: req.body?.attachedHabits,
+      attachedMetric: req.body?.attachedMetric,
+      attachedProject: req.body?.attachedProject,
     };
 
     room.feedPosts.unshift(newPost);

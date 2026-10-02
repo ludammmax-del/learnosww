@@ -68,27 +68,115 @@ export class ExecutionSandboxService {
       },
     };
 
-    // If text or non-executable format, validate structure
+    // If text or non-executable format, validate structure with semantic and criteria checks
     if (language === 'text' || (!code.trim().includes('function') && !code.trim().includes('def ') && !code.trim().includes('class ') && !code.trim().includes('const ') && !code.trim().includes('let ') && !code.trim().includes('var ') && !code.trim().includes('import '))) {
-      const wordsCount = code.trim().split(/\s+/).filter(Boolean).length;
-      const hasStructure = code.includes('#') || code.includes('- ') || code.includes('1.') || code.includes(':');
-      
+      const trimmed = code.trim();
+      const wordsCount = trimmed.split(/\s+/).filter(Boolean).length;
+      const sentencesCount = (trimmed.match(/[^.!?]+[.!?]+/g) || []).length;
+      const hasStructure = trimmed.includes('#') || trimmed.includes('- ') || trimmed.includes('1.') || trimmed.includes(':') || sentencesCount >= 3;
+      const hasCausalReasoning = /потому что|следовательно|так как|в результате|инвариант|критерий|компромисс|trade-off|поэтому|для того чтобы|гарантирует/i.test(trimmed);
+
+      // Try AI-powered analysis if available
+      try {
+        const aiResponse = await fetch('/api/gemini/analyze-project', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            projectName: 'Текстовое практическое задание',
+            code: trimmed,
+            filename: 'solution.md',
+            requirements: tests.length > 0 ? tests.map((t) => t.name).join('; ') : 'Полнота аргументации, логическая связность и опора на инварианты',
+            fileType: 'markdown',
+          }),
+        });
+
+        if (aiResponse.ok) {
+          const aiData = await aiResponse.json();
+          if (aiData && typeof aiData.score === 'number') {
+            const passed = aiData.score >= 70;
+            logs.push({
+              type: passed ? 'info' : 'warn',
+              text: `ИИ-Анализ артефакта: Оценка ${aiData.score}/100. Вердикт: ${aiData.verdict || (passed ? 'Зачтено' : 'Требует доработки')}`,
+              time: Date.now(),
+            });
+
+            if (Array.isArray(aiData.strongPoints)) {
+              aiData.strongPoints.slice(0, 3).forEach((p: string) => {
+                logs.push({ type: 'log', text: `✓ ${p}`, time: Date.now() });
+              });
+            }
+            if (Array.isArray(aiData.productionAdvice)) {
+              aiData.productionAdvice.slice(0, 2).forEach((a: string) => {
+                logs.push({ type: 'info', text: `💡 Совет: ${a}`, time: Date.now() });
+              });
+            }
+
+            const dynamicTests: TestResult[] = tests.length > 0
+              ? tests.map((t, idx) => ({
+                  name: t.name,
+                  passed: aiData.score >= (60 + idx * 10),
+                  durationMs: Math.round(performance.now() - startTime),
+                }))
+              : [
+                  { name: 'Концептуальная глубина и аргументация', passed: aiData.score >= 70 },
+                  { name: 'Полнота раскрытия и инварианты', passed: aiData.score >= 60 },
+                  { name: 'Отсутствие поверхностного шума («воды»)', passed: aiData.score >= 65 },
+                ];
+
+            const passedCount = dynamicTests.filter((t) => t.passed).length;
+            return {
+              success: passed,
+              logs,
+              returnValue: `Оценка: ${aiData.score}/100`,
+              testResults: dynamicTests,
+              testsPassed: passedCount,
+              totalTests: dynamicTests.length,
+              durationMs: Math.round(performance.now() - startTime),
+            };
+          }
+        }
+      } catch {
+        // Fallback to strict multi-criteria heuristic
+      }
+
+      // Multi-criteria heuristic evaluation
+      const lengthScore = wordsCount >= 30;
+      const depthScore = wordsCount >= 15 && sentencesCount >= 2;
+      const reasoningScore = hasCausalReasoning || wordsCount >= 45;
+
+      const dynamicTests: TestResult[] = tests.length > 0
+        ? tests.map((t) => {
+            const targetKeywords = t.name.toLowerCase().split(/\s+/).filter((w) => w.length > 4);
+            const matchesKeyword = targetKeywords.some((kw) => trimmed.toLowerCase().includes(kw));
+            const testPassed = (matchesKeyword && depthScore) || (lengthScore && reasoningScore);
+            return {
+              name: t.name,
+              passed: testPassed,
+              durationMs: Math.round(performance.now() - startTime),
+            };
+          })
+        : [
+            { name: 'Содержательность и объем формулировки (>= 25-30 слов)', passed: lengthScore },
+            { name: 'Структура аргументации (пункты или связные тезисы)', passed: hasStructure },
+            { name: 'Причинно-следственные связи и инварианты решения', passed: reasoningScore },
+          ];
+
+      const passedCount = dynamicTests.filter((t) => t.passed).length;
+      const isOverallSuccess = passedCount >= Math.ceil(dynamicTests.length * 0.65);
+
       logs.push({
-        type: 'info',
-        text: `Текстовый артефакт проверен: ${wordsCount} слов. Структурированность: ${hasStructure ? 'Высокая' : 'Базовая'}.`,
+        type: isOverallSuccess ? 'info' : 'warn',
+        text: `Анализ решения: ${wordsCount} слов, ${sentencesCount} предложений. Структурированность: ${hasStructure ? 'Высокая' : 'Базовая'}. Причинно-следственные связки: ${hasCausalReasoning ? 'Присутствуют' : 'Рекомендуется усилить'}.`,
         time: Date.now(),
       });
 
       return {
-        success: wordsCount > 10,
+        success: isOverallSuccess,
         logs,
-        returnValue: `Слов: ${wordsCount}`,
-        testResults: [
-          { name: 'Полнота раскрытия задачи (объем)', passed: wordsCount >= 15 },
-          { name: 'Логическая структура (тезисы/пункты)', passed: hasStructure },
-        ],
-        testsPassed: (wordsCount >= 15 ? 1 : 0) + (hasStructure ? 1 : 0),
-        totalTests: 2,
+        returnValue: `Слов: ${wordsCount}, структура: ${hasStructure ? 'OK' : 'Доработать'}`,
+        testResults: dynamicTests,
+        testsPassed: passedCount,
+        totalTests: dynamicTests.length,
         durationMs: Math.round(performance.now() - startTime),
       };
     }

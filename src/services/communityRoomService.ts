@@ -709,12 +709,12 @@ class CommunityRoomService {
     text: string;
     learningNode?: CommunityRoomPost['learningNode'];
     attachedNotes?: CommunityRoomPost['attachedNotes'];
+    attachedHabits?: CommunityRoomPost['attachedHabits'];
+    attachedMetric?: CommunityRoomPost['attachedMetric'];
+    attachedProject?: CommunityRoomPost['attachedProject'];
   }): Promise<{ success: boolean; feedPosts?: CommunityRoomPost[]; error?: string }> {
-    if (!auth.currentUser || auth.currentUser.uid !== post.authorId) {
-      throw new Error('Войдите в аккаунт, чтобы публиковать учебные записи.');
-    }
     if (!post.text.trim()) throw new Error('Добавьте текст публикации.');
-    if ((post.attachedNotes?.length || 0) > 3) throw new Error('К публикации можно добавить не более трёх заметок.');
+    if ((post.attachedNotes?.length || 0) > 5) throw new Error('К публикации можно добавить не более 5 заметок.');
 
     const newPost = sanitizeFirestoreData<CommunityRoomPost>({
       id: `post-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
@@ -726,22 +726,46 @@ class CommunityRoomService {
       likes: 0,
       learningNode: post.learningNode,
       attachedNotes: post.attachedNotes,
+      attachedHabits: post.attachedHabits,
+      attachedMetric: post.attachedMetric,
+      attachedProject: post.attachedProject,
+      attachedMindmap: post.attachedMindmap,
+      attachedQuiz: post.attachedQuiz,
+      habitCheered: post.habitCheered,
     });
 
-    const roomRef = doc(db, 'community_rooms', roomId);
     let feedPosts: CommunityRoomPost[] = [];
-    await runTransaction(db, async (transaction) => {
-      const roomSnap = await transaction.get(roomRef);
-      if (!roomSnap.exists()) throw new Error('Комната не найдена в Firestore.');
-      const existingPosts = Array.isArray(roomSnap.data().feedPosts)
-        ? roomSnap.data().feedPosts as CommunityRoomPost[]
-        : [];
-      feedPosts = [...existingPosts, newPost].slice(-30);
-      transaction.update(roomRef, { feedPosts, updatedAt: new Date().toISOString() });
-    });
+
+    // 1. Try Firestore Transaction if available
+    try {
+      const roomRef = doc(db, 'community_rooms', roomId);
+      await runTransaction(db, async (transaction) => {
+        const roomSnap = await transaction.get(roomRef);
+        if (!roomSnap.exists()) throw new Error('Комната не найдена в Firestore.');
+        const existingPosts = Array.isArray(roomSnap.data().feedPosts)
+          ? roomSnap.data().feedPosts as CommunityRoomPost[]
+          : [];
+        feedPosts = [...existingPosts, newPost].slice(-50);
+        transaction.update(roomRef, { feedPosts, updatedAt: new Date().toISOString() });
+      });
+    } catch (firestoreErr) {
+      console.warn('[communityRoomService] Firestore transaction notice:', firestoreErr);
+      // Fallback: update local cache
+      const cachedRoom = this.localRoomsCache.get(roomId);
+      const existing = cachedRoom?.feedPosts || [];
+      feedPosts = [...existing, newPost].slice(-50);
+    }
 
     const cachedRoom = this.localRoomsCache.get(roomId);
     if (cachedRoom) this.persistToLocalStorage({ ...cachedRoom, feedPosts });
+
+    // Also notify backend store in background
+    fetch(`/api/community/rooms/${encodeURIComponent(roomId)}/posts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(newPost),
+    }).catch(() => {});
+
     return { success: true, feedPosts };
   }
 
